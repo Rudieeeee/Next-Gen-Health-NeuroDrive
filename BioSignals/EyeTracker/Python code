@@ -1,0 +1,107 @@
+import cv2
+import mediapipe as mp
+
+# Initialize MediaPipe FaceMesh
+mp_face_mesh = mp.solutions.face_mesh
+face_mesh = mp_face_mesh.FaceMesh(refine_landmarks=True)
+mp_drawing = mp.solutions.drawing_utils
+
+# Landmark indices
+RIGHT_EYE_IDX = [33, 133]
+LEFT_EYE_IDX = [362, 263]
+RIGHT_IRIS_IDX = 468
+LEFT_IRIS_IDX = 473
+RIGHT_EYE_TOP = 159
+RIGHT_EYE_BOTTOM = 145
+LEFT_EYE_TOP = 386
+LEFT_EYE_BOTTOM = 374
+
+# Dot memory
+smooth_x, smooth_y = 0.5, 0.5
+alpha = 1.0  # fully reactive
+amplification_factor = 2.0  # 🔥 Increase to push the dot further (2.0 = 2x movement)
+
+def get_eye_gaze(eye_landmarks, iris, eye_top, eye_bottom):
+    eye_left, eye_right = eye_landmarks
+    eye_width = abs(eye_right.x - eye_left.x)
+    iris_x_offset = abs(iris.x - eye_left.x)
+    hor_pos = iris_x_offset / eye_width if eye_width > 0 else 0.5
+
+    eye_height = abs(eye_bottom.y - eye_top.y)
+    iris_y_offset = abs(iris.y - eye_top.y)
+    ver_pos = iris_y_offset / eye_height if eye_height > 0 else 0.5
+
+    return hor_pos, ver_pos
+
+def classify_gaze(hor, ver):
+    if 0.40 < hor < 0.60 and 0.4 < ver < 0.6:
+        return "CENTER"
+    elif hor < 0.40:
+        return "LEFT"
+    elif hor > 0.60:
+        return "RIGHT"
+    elif ver > 0.60:
+        return "DOWN"
+    elif ver < 0.40:
+        return "UP"
+    else:
+        return "CENTER"
+
+# Webcam
+cap = cv2.VideoCapture(0)
+
+while cap.isOpened():
+    success, frame = cap.read()
+    if not success:
+        break
+
+    frame = cv2.flip(frame, 1)
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = face_mesh.process(rgb_frame)
+
+    if results.multi_face_landmarks:
+        for face_landmarks in results.multi_face_landmarks:
+            lm = face_landmarks.landmark
+
+            hor_r, ver_r = get_eye_gaze(
+                [lm[RIGHT_EYE_IDX[0]], lm[RIGHT_EYE_IDX[1]]],
+                lm[RIGHT_IRIS_IDX],
+                lm[RIGHT_EYE_TOP], lm[RIGHT_EYE_BOTTOM]
+            )
+            hor_l, ver_l = get_eye_gaze(
+                [lm[LEFT_EYE_IDX[0]], lm[LEFT_EYE_IDX[1]]],
+                lm[LEFT_IRIS_IDX],
+                lm[LEFT_EYE_TOP], lm[LEFT_EYE_BOTTOM]
+            )
+
+            hor_avg = (hor_r + hor_l) / 2
+            ver_avg = (ver_r + ver_l) / 2
+
+            # Reactive update
+            smooth_x = alpha * hor_avg + (1 - alpha) * smooth_x
+            smooth_y = alpha * ver_avg + (1 - alpha) * smooth_y
+
+            # 🔥 Amplify how far the dot goes from center
+            amplified_x = 0.5 + (smooth_x - 0.5) * amplification_factor
+            amplified_y = 0.5 + (smooth_y - 0.5) * amplification_factor
+
+            # Clamp values between 0 and 1
+            amplified_x = max(0.0, min(1.0, amplified_x))
+            amplified_y = max(0.0, min(1.0, amplified_y))
+
+            gaze_direction = classify_gaze(hor_avg, ver_avg)
+            cv2.putText(frame, f"Gaze: {gaze_direction}", (30, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+
+            # Map to screen
+            height, width, _ = frame.shape
+            dot_x = int(amplified_x * width)
+            dot_y = int(amplified_y * height)
+            cv2.circle(frame, (dot_x, dot_y), 12, (0, 0, 255), -1)
+
+    cv2.imshow('Amplified Gaze Tracker', frame)
+    if cv2.waitKey(1) & 0xFF == 27:
+        break
+
+cap.release()
+cv2.destroyAllWindows()
