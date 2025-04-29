@@ -5,5 +5,6 @@ Contract:
 
 Logboek: https://docs.google.com/document/d/19sPPB86vADv1Kta0CXgQZZuRMN1z7J48IxNUdUk5iPk/edit?tab=t.0
 
-
 ChatMember: https://chatgpt.com/
+
+Interview vragen: https://docs.google.com/document/d/1kSljeIy8DDjXwbvnDqOW8rniej1UIzL5Ra_eNMwFU7s/edit?tab=t.0#heading=h.fwgspjoztrs0
