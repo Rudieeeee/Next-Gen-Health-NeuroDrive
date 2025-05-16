@@ -21,8 +21,6 @@ project plan: https://www.overleaf.com/5788339747tqxtpmdgksmp#ba869d
 
 contract: https://docs.google.com/document/d/1aOxjBTG2PezTipDgbOpGbMbSqr9zg_whS1Er1ti7u0g/edit?tab=t.0 
 
-meetings: https://docs.google.com/document/d/19sPPB86vADv1Kta0CXgQZZuRMN1z7J48IxNUdUk5iPk/edit?tab=t.owy1u4vess1o 
-
 personality and technical report: https://onedrive.live.com/:w:/g/personal/D9B315E937ED9D64/ETX5WOpBnJlMum-qzQD66roByT_9cV485bjrLs07AG8JpQ?resid=D9B315E937ED9D64!sea58f9359c414c99ba6faacd00faeaba&ithint=file%2Cdocx&e=shl3FY&migratedtospo=true&redeem=aHR0cHM6Ly8xZHJ2Lm1zL3cvYy9kOWIzMTVlOTM3ZWQ5ZDY0L0VUWDVXT3BCbkpsTXVtLXF6UUQ2NnJvQnlUXzljVjQ4NWJqckxzMDdBRzhKcFE_ZT1zaGwzRlk en https://docs.google.com/document/d/1qKZ0ccwHcl71QK0JUOwR8PJr1u9FMpFe4uniS6Zuxjs/edit?tab=t.0 
 
 meetings: https://www.overleaf.com/project/68278e6aad4734250d56acb7
