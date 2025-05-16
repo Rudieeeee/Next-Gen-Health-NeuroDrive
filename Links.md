@@ -14,6 +14,7 @@ Daily scrum: https://docs.google.com/document/d/1-C7L4U6Q7UWDNMUnwhYEEHFTMhv0JoE
 Feedback: https://docs.google.com/document/d/1c_mvVrbU_vcvh2DTF1MeEnO0vOmHCtP9CdKzzKyCfm0/edit?tab=t.0
 
 Teamwork portfolio
+
 Team commitment contract (Omar)
 https://docs.google.com/document/d/1aOxjBTG2PezTipDgbOpGbMbSqr9zg_whS1Er1ti7u0g/edit?usp=sharing
 
