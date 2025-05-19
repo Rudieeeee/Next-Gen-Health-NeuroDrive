@@ -1,0 +1,223 @@
+#include <Arduino_CAN.h>
+
+/**************************************************************************************
+ * CONFIG
+ **************************************************************************************/
+const uint32_t CAN_ID = 0x02000000;      // 29-bit extended CAN ID
+const uint32_t PROFILE_ID = 0x051;       // Standard 11-bit ID for profile change
+const uint32_t INCREMENT_ID = 0x0A040000; // ID for increment/decrement logic
+const int STANDBY_PIN = 7;
+const unsigned long SEND_INTERVAL_MS = 10;
+const unsigned long STEP_INTERVAL_MS = 684;
+
+// Pirates of the Caribbean melody: {length, note}
+const uint8_t piratesMelody[] = {
+  0x30, 0x43,  // G4
+  0x30, 0x44,  // G#4
+  0x30, 0x45,  // A4
+  0x30, 0x43,  // G4
+  0x30, 0x40,  // E4
+  0x30, 0x41,  // F4
+  0x30, 0x43,  // G4
+  0x60, 0x43,  // G4 (long)
+
+  0x30, 0x43,  // G4
+  0x30, 0x44,  // G#4
+  0x30, 0x45,  // A4
+  0x30, 0x46,  // A#4
+  0x30, 0x47,  // B4
+  0x30, 0x45,  // A4
+  0x30, 0x43,  // G4
+  0xFF, 0x40   // E4 (very long)
+};
+
+const size_t melodyLength = sizeof(piratesMelody) / 2;
+
+bool melody_active = false;
+unsigned long melody_delay = 0;
+unsigned long last_melody_time = 0;
+size_t melody_index = 0;
+
+
+/**************************************************************************************
+ * GLOBALS
+ **************************************************************************************/
+uint8_t can_data[8] = {0};  // Movement data
+char current_direction = 0;
+unsigned long last_send_time = 0;
+unsigned long last_step_time = 0;
+uint8_t step_value = 0x00;  // Always 2-digit hex
+bool profile_sent = false;
+bool send_step_flag = false;  // Controls whether to send step_value every 684 ms
+
+void setup()
+{
+  Serial.begin(115200);
+  while (!Serial) {}
+
+  pinMode(STANDBY_PIN, OUTPUT);
+  digitalWrite(STANDBY_PIN, LOW);
+
+  if (!CAN.begin(CanBitRate::BR_125k))
+  {
+    Serial.println("CAN.begin(...) failed.");
+    while (1);
+  }
+
+  Serial.println("CAN Initialized. Type w/a/s/d/x/p/h/l in Serial Monitor:");
+}
+
+void loop()
+{
+  // Serial input check
+  if (Serial.available())
+  {
+    char input = tolower(Serial.read());
+
+    switch (input)
+    {
+      case 'w':
+        can_data[0] = 0x00;
+        can_data[1] = 0x64;
+        current_direction = 'w';
+        break;
+      case 'a':
+        can_data[0] = 0x9C;
+        can_data[1] = 0x00;
+        current_direction = 'a';
+        break;
+      case 's':
+        can_data[0] = 0x00;
+        can_data[1] = 0x9C;
+        current_direction = 's';
+        break;
+      case 'd':
+        can_data[0] = 0x64;
+        can_data[1] = 0x00;
+        current_direction = 'd';
+        break;
+      case 'x':
+        can_data[0] = 0x00;
+        can_data[1] = 0x00;
+        current_direction = 'x';
+        break;
+      case 'p':
+        sendProfileChange();
+        break;
+      case 'h':  // Increment ONCE
+        if (step_value <= 0xF0) step_value += 0x10;
+        send_step_flag = true;  // Enable periodic sending
+        Serial.println("Step value increased.");
+        break;
+      case 'l':  // Decrement ONCE
+        if (step_value >= 0x10) step_value -= 0x10;
+        send_step_flag = true;  // Enable periodic sending
+        Serial.println("Step value decreased.");
+        break;
+      case 'm':
+        if (!melody_active) {
+          melody_active = true;
+          melody_index = 0;
+          melody_delay = 0;
+          last_melody_time = millis();
+          Serial.println("Playing Pirates of the Caribbean melody...");
+        }
+        break;
+
+    }
+
+    Serial.print("Direction set to: ");
+    Serial.println(current_direction);
+  }
+
+  // Send movement message every 10 ms
+  if (millis() - last_send_time >= SEND_INTERVAL_MS)
+  {
+    last_send_time = millis();
+    CanMsg msg(CanExtendedId(CAN_ID), 2, can_data);
+    int rc = CAN.write(msg);
+    if (rc <= 0)
+    {
+      Serial.print("CAN.write failed: ");
+      Serial.println(rc);
+    }
+  }
+
+  // Send updated step value every 684 ms (but no auto-change)
+  if (send_step_flag && (millis() - last_step_time >= STEP_INTERVAL_MS))
+  {
+    last_step_time = millis();
+    uint8_t step_data[1] = { step_value };
+    CanMsg step_msg(CanExtendedId(INCREMENT_ID), 1, step_data);
+    int rc = CAN.write(step_msg);
+
+    Serial.print("Step value sent: 0x");
+    if (step_value < 0x10) Serial.print("0");
+    Serial.println(step_value, HEX);
+
+    if (rc <= 0)
+    {
+      Serial.print("Step send failed: ");
+      Serial.println(rc);
+    }
+  }
+
+    // Play melody step-by-step based on tone durations
+  if (melody_active && (millis() - last_melody_time >= melody_delay))
+  {
+    if (melody_index >= melodyLength) {
+      melody_active = false;
+      Serial.println("Melody finished.");
+      return;
+    }
+
+    uint8_t data[8] = {0};
+    size_t tones_added = 0;
+    melody_delay = 0;
+
+    while (melody_index < melodyLength && tones_added < 4)
+    {
+      uint8_t len = piratesMelody[melody_index * 2];
+      uint8_t note = piratesMelody[melody_index * 2 + 1];
+
+      data[tones_added * 2] = len;
+      data[tones_added * 2 + 1] = note;
+
+      // Assume 0xFF = 1240 ms, scale proportionally
+      melody_delay += map(len, 0, 0xFF, 0, 1240);
+
+      melody_index++;
+      tones_added++;
+    }
+
+    CanMsg music_msg(CanExtendedId(0x181C0D00), 8, data);
+    CAN.write(music_msg);
+
+    Serial.print("Sent tone block, next in ");
+    Serial.print(melody_delay);
+    Serial.println(" ms");
+
+    last_melody_time = millis();
+  }
+
+}
+
+void sendProfileChange()
+{
+  if (profile_sent) return;
+
+  uint8_t profile_data[4] = { 0x84, 0x00, 0x00, 0x01 };
+  CanMsg msg(CanStandardId(PROFILE_ID), 4, profile_data);
+  int rc = CAN.write(msg);
+
+  if (rc > 0)
+  {
+    Serial.println("Profile change message sent.");
+    profile_sent = true;
+  }
+  else
+  {
+    Serial.print("Failed to send profile change: ");
+    Serial.println(rc);
+  }
+}
