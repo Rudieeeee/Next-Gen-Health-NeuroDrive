@@ -1,0 +1,207 @@
+/*******************************************************************************************
+* upgraded_sender.ino
+*
+* - Acts as a BLE central to connect with a peripheral named "NextComputer"
+* - Continuously reads EMG signals from analog pin A0 using 16-bit resolution
+* - Detects gesture patterns based on EMG intensity and duration:
+*     0b001: Single pulse (short burst above threshold)
+*     0b010: Double pulse (two quick bursts)
+*     0b100: Long pulse (sustained signal above threshold)
+* - Sends 3-bit values over BLE to indicate detected gestures
+*******************************************************************************************/
+#include <ArduinoBLE.h>
+
+// [ADC and EMG setup]
+int resolutionBits = 16;           // [16-bit ADC resolution: max detail from analog input]
+int analogPin = A0;                // [Analog pin used for EMG signal]
+int updateTime = 50;               // [How often to check EMG, in milliseconds]
+float threshold = 1.8;               // [Minimum EMG value needed to send over BLE]
+
+//flags are used to make sure you only send once when EMG is above threshold
+bool above_threshold = 0;
+bool above_time = 0;
+bool dubble_possible= 0;
+
+//counters are used to count how long signal is above and below threshold
+int EMG_time = 0;
+int EMG_count = 0;
+int below_threshold_count = 0;
+int below_threshold_time = 0;
+
+int dubble_threshold = 500;   //time for dubble click in ms
+int time_threshold = 1000;    //time for long click in ms
+
+// [LED pin mappings for onboard RGB LEDs]
+void RedLed(bool state)   { (GPIOI->ODR) = state ? 0x0000 : 0x1000; }
+void GreenLed(bool state) { (GPIOJ->ODR) = state ? 0x0000 : 0x2000; }
+void BlueLed(bool state)  { (GPIOE->ODR) = state ? 0x0000 : 0x0008; }
+
+void setup() {
+  // [Configure LED pins as outputs]
+  pinMode(86, OUTPUT);
+  pinMode(87, OUTPUT);
+  pinMode(88, OUTPUT);
+
+  // [Start Serial communication for debugging]
+  Serial.begin(115200);
+  while (!Serial);
+  Serial.println("Sender.ino starting...");
+
+  // [Set analog read resolution]
+  analogReadResolution(resolutionBits);
+
+  // [Initialize BLE hardware]
+  if (!BLE.begin()) {
+    Serial.println("BLE failed to start!");
+    while (1);  // [Stop if BLE fails]
+  }
+
+  // [Set Bluetooth device name]
+  BLE.setLocalName("EMG-Sender");
+  Serial.print("BLE Address: ");
+  Serial.println(BLE.address());
+
+  // [Show RED LED to indicate "not connected" state]
+  RedLed(true);
+  GreenLed(false);
+  BlueLed(false);
+}
+
+// [Reads EMG signal N times and returns the average]
+int readADC() {
+  long total = 0;
+  const int N = 100;
+  for (int i = 0; i < N; i++) {
+    analogReadResolution(resolutionBits); // Set resolution to maximum of arduino Giga. Default is 10bit
+    int sensorValue = analogRead(A0);
+    total += sensorValue;
+  }
+  return total/N;
+}
+
+void loop() {
+  Serial.println("Scanning for 'NextComputer'...");
+  BLE.scanForName("NextComputer");  // [Look for a peripheral named 'NextComputer']
+
+  // [Wait until a device is found]
+  BLEDevice computer = BLE.available();
+  while (!computer) {
+    computer = BLE.available();
+    delay(100);
+  }
+
+  Serial.print("Found device: ");
+  Serial.println(computer.address());
+
+  BLE.stopScan();  // [Stop scanning once found]
+
+  // [Try to connect]
+  if (!computer.connect()) {
+    Serial.println("Failed to connect.");
+    return;
+  }
+
+  Serial.println("Connected!");
+  RedLed(false);
+  BlueLed(true);  // [Show connection with blue LED]
+
+  // [Try to find BLE characteristics and services on the device]
+  if (!computer.discoverAttributes()) {
+    Serial.println("Attribute discovery failed.");
+    computer.disconnect();
+    return;
+  }
+
+  // [Get the characteristic to write EMG data to]
+  BLECharacteristic writeChar = computer.characteristic("51FF12BB-3ED8-46E5-B4F9-D64E2FEC021B");
+
+  if (!writeChar || !writeChar.canWrite()) {
+    Serial.println("Characteristic not writable or not found.");
+    computer.disconnect();
+    return;
+  }
+
+  // [Prepare timing + LED toggle state]
+  unsigned long previousMillis = 0;
+
+  // [Main loop: while still connected to BLE peripheral]
+  while (computer.connected()) {
+    unsigned long currentMillis = millis();
+    if (currentMillis - previousMillis >= updateTime) {
+      previousMillis = currentMillis;
+
+      int emgValue = readADC();         // [Read EMG signal]
+      unsigned long timestamp = millis();  // [Get current time]
+      double voltage = (emgValue * 3.3 / 65536);
+
+      if (voltage >= threshold) {
+        EMG_count += 1; //counts how long EMG is above threshold
+        EMG_time = EMG_count * updateTime;  //time in mili seconds
+
+        //reseting below_threshold_timer
+        below_threshold_count = 0;
+        below_threshold_time = 0;
+
+        if (above_threshold == 0 && dubble_possible == 0){ //when its first time above threshold send 001
+          Serial.println("SENDING_SINGLE");
+          uint8_t value = 0b001;
+          bool success = writeChar.writeValue(&value, 1);
+
+          if (!success) {
+            Serial.println("BLE write failed!");
+            break;
+          }
+          dubble_possible = 1;  //after the first click it will be possible to sense a dubble click
+        }
+        else if(above_threshold == 0 && dubble_possible == 1){  //when second click has been sensed send 010
+          Serial.println("SENDING_DUBBLE");
+          uint8_t value = 0b010;
+          bool success = writeChar.writeValue(&value, 1);
+          dubble_possible = 0;
+
+          if (!success) {
+            Serial.println("BLE write failed!");
+            break;
+          }
+        }
+
+        if(EMG_time > time_threshold && above_time == 0){ //when EMG is HIGH for 1 sec send 100
+          Serial.println("SENDING_LONG");
+          uint8_t value = 0b100;
+          bool success = writeChar.writeValue(&value, 1);
+          dubble_possible = 0;
+
+          if (!success) {
+            Serial.println("BLE write failed!");
+            break;
+          }
+          above_time = 1;
+        }
+
+        above_threshold = 1;
+
+      } else {  //below threshold
+        below_threshold_count += 1; //counts how long EMG is below threshold
+        below_threshold_time = below_threshold_count *updateTime; //time in mili seconds
+
+        if(below_threshold_time > dubble_threshold){  //if no EMG detected for 500 ms then dubble is no longe possible
+          dubble_possible = 0;
+        }
+
+        //reseting the timers and flags
+        above_threshold = 0;
+        above_time = 0;
+        EMG_count = 0;
+        EMG_time = 0;
+      }
+      Serial.println(voltage);
+      delay(5);  // [Short delay to avoid overwhelming BLE stack]
+    }
+  }
+
+  // [Disconnected from receiver — reset state]
+  Serial.println("Disconnected from peripheral.");
+  computer.disconnect();
+
+  delay(1000);  // [Wait before trying to reconnect]
+}
