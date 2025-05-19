@@ -1,0 +1,114 @@
+#include <ArduinoBLE.h>
+#include <Arduino_CAN.h>
+
+// UUIDs for BLE characteristic/service (must match sender)
+#define DATA_CHAR_UUID "51FF12BB-3ED8-46E5-B4F9-D64E2FEC021B"
+#define SERVICE_UUID   "19B10010-E8F2-537E-4F6C-D104768A1214"
+
+BLEService dataService(SERVICE_UUID);
+BLECharacteristic dataCharacteristic(DATA_CHAR_UUID, BLEWriteWithoutResponse, 20);
+
+// CAN settings
+const uint32_t CAN_ID = 0x02000000; // Extended CAN ID
+const int STANDBY_PIN = 7;
+
+// Data storage
+uint8_t lastReceivedData[2] = {0x00, 0x00};
+bool dataAvailable = false;
+unsigned long lastSendTime = 0;
+
+// LED helpers for Arduino GIGA
+void RedLed(bool state)   { (GPIOI->ODR) = state ? 0x0000 : 0x1000; }
+void GreenLed(bool state) { (GPIOJ->ODR) = state ? 0x0000 : 0x2000; }
+void BlueLed(bool state)  { (GPIOE->ODR) = state ? 0x0000 : 0x0008; }
+
+// BLE write callback
+void onDataWritten(BLEDevice central, BLECharacteristic characteristic) {
+  if (characteristic.valueLength() == 2) {
+    characteristic.readValue(lastReceivedData, 2);
+    dataAvailable = true;
+
+    Serial.print("BLE Received: ");
+    Serial.print("0x");
+    Serial.print(lastReceivedData[0], HEX);
+    Serial.print(" 0x");
+    Serial.println(lastReceivedData[1], HEX);
+
+    // Flash LED once on new input
+    static bool toggle = false;
+    BlueLed(toggle);
+    toggle = !toggle;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial);
+  Serial.println("Receiver starting...");
+
+  RedLed(true);
+  GreenLed(false);
+  BlueLed(false);
+
+  // CAN setup
+  pinMode(STANDBY_PIN, OUTPUT);
+  digitalWrite(STANDBY_PIN, LOW);
+  if (!CAN.begin(CanBitRate::BR_125k)) {
+    Serial.println("CAN init failed!");
+    while (1);
+  }
+
+  // BLE setup
+  if (!BLE.begin()) {
+    Serial.println("BLE failed to start!");
+    while (1);
+  }
+
+  BLE.setLocalName("NextComputer");
+  BLE.setAdvertisedService(dataService);
+  dataService.addCharacteristic(dataCharacteristic);
+  BLE.addService(dataService);
+
+  dataCharacteristic.setEventHandler(BLEWritten, onDataWritten);
+  BLE.advertise();
+
+  Serial.println("BLE ready and advertising...");
+}
+
+void loop() {
+  BLEDevice central = BLE.central();
+
+  if (central) {
+    Serial.print("Connected to central: ");
+    Serial.println(central.address());
+    RedLed(false);
+    GreenLed(true);
+
+    while (central.connected()) {
+      BLE.poll();
+
+      // Send last data to CAN every 10 ms
+      if (dataAvailable && (millis() - lastSendTime >= 10)) {
+        lastSendTime = millis();
+
+        CanMsg msg(CanExtendedId(CAN_ID), 2, lastReceivedData);
+        int rc = CAN.write(msg);
+
+        if (rc > 0) {
+          Serial.print("Repeated CAN send: ");
+          Serial.print("0x");
+          Serial.print(lastReceivedData[0], HEX);
+          Serial.print(" 0x");
+          Serial.println(lastReceivedData[1], HEX);
+        } else {
+          Serial.println("CAN write failed");
+        }
+      }
+    }
+
+    Serial.println("Disconnected.");
+    RedLed(true);
+    GreenLed(false);
+    dataAvailable = false;
+  }
+}
