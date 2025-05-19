@@ -1,0 +1,90 @@
+#include <ArduinoBLE.h>
+
+// UUID of the writable BLE characteristic
+const char* targetDeviceName = "NextComputer";
+const char* writeCharUUID = "51FF12BB-3ED8-46E5-B4F9-D64E2FEC021B";
+
+BLEDevice targetDevice;
+BLECharacteristic writeChar;
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial);
+
+  if (!BLE.begin()) {
+    Serial.println("BLE failed to initialize");
+    while (1);
+  }
+
+  Serial.println("Scanning for device...");
+  BLE.scanForName(targetDeviceName);
+
+  // Wait until device found
+  while (!(targetDevice = BLE.available())) {
+    delay(100);
+  }
+
+  Serial.print("Connecting to ");
+  Serial.println(targetDevice.address());
+  BLE.stopScan();
+
+  if (!targetDevice.connect()) {
+    Serial.println("Connection failed.");
+    while (1);
+  }
+
+  if (!targetDevice.discoverAttributes()) {
+    Serial.println("Attribute discovery failed.");
+    targetDevice.disconnect();
+    while (1);
+  }
+
+  writeChar = targetDevice.characteristic(writeCharUUID);
+  if (!writeChar || !writeChar.canWrite()) {
+    Serial.println("Characteristic not found or not writable.");
+    targetDevice.disconnect();
+    while (1);
+  }
+
+  Serial.println("Connected! Type w/a/s/d/x to send movement data.");
+}
+
+void loop() {
+  if (Serial.available()) {
+    char input = tolower(Serial.read());
+    uint8_t data[2];
+
+    switch (input) {
+      case 'w':
+        data[0] = 0x00; data[1] = 0x64;
+        break;
+      case 'a':
+        data[0] = 0x9C; data[1] = 0x00;
+        break;
+      case 's':
+        data[0] = 0x00; data[1] = 0x9C;
+        break;
+      case 'd':
+        data[0] = 0x64; data[1] = 0x00;
+        break;
+      case 'x':
+        data[0] = 0x00; data[1] = 0x00;
+        break;
+      default:
+        return; // Ignore other input
+    }
+
+    bool success = writeChar.writeValue(data, 2);
+    if (success) {
+      Serial.print("Sent ");
+      Serial.print(input);
+      Serial.print(": ");
+      Serial.print("0x");
+      Serial.print(data[0], HEX);
+      Serial.print(" 0x");
+      Serial.println(data[1], HEX);
+    } else {
+      Serial.println("BLE write failed");
+    }
+  }
+}
