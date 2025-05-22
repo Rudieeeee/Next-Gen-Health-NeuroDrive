@@ -1,0 +1,106 @@
+//receiver
+// -*- coding: iso-8859-1 -*-
+#include <ArduinoBLE.h>
+
+// LED control functions for Arduino Giga
+void RedLed(bool state) {
+  (GPIOI->ODR) = state ? 0x0000 : 0x1000;
+}
+
+void GreenLed(bool state) {
+  (GPIOJ->ODR) = state ? 0x0000 : 0x2000;
+}
+
+void BlueLed(bool state) {
+  (GPIOE->ODR) = state ? 0x0000 : 0x0008;
+}
+
+// BLE service and characteristic definitions
+#define DATA_CHAR_UUID "51FF12BB-3ED8-46E5-B4F9-D64E2FEC021B"
+#define SERVICE_UUID   "19B10010-E8F2-537E-4F6C-D104768A1214"
+
+BLEService dataService(SERVICE_UUID);
+BLECharacteristic dataCharacteristic(DATA_CHAR_UUID, BLEWriteWithoutResponse, 20);
+
+// Global variables for accumulating received bytes
+volatile bool newValueFlag = false;     // true when 0x00 start byte received
+volatile uint8_t valueBuffer[2];        // to hold high and low byte
+volatile int byteCounter = 0;           // number of data bytes received
+volatile bool receivedValueReady = false;
+volatile int receivedValue = 0;         // reconstructed 16-bit integer
+
+// Toggle state for blue LED
+bool blueLedState = false;
+
+// BLE write callback
+void onDataWritten(BLEDevice central, BLECharacteristic characteristic) {
+  int len = characteristic.valueLength();
+  if (len < 1) return;
+
+  uint8_t data;
+  characteristic.readValue(&data, 1);
+
+  // Mask to extract only the lower 3 bits
+  uint8_t threeBitValue = data & 0b00000111;
+
+  // Store the received value
+  receivedValue = threeBitValue;
+  receivedValueReady = true;
+
+  // Blink blue LED
+  blueLedState = !blueLedState;
+  BlueLed(blueLedState);
+}
+
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial);
+  Serial.println("Receiver.ino starting...");
+
+  // Initial LED state
+  RedLed(true);
+  GreenLed(false);
+  BlueLed(false);
+
+  if (!BLE.begin()) {
+    Serial.println("BLE failed to start!");
+    while (1);
+  }
+
+  BLE.setLocalName("NextComputer");
+  BLE.setAdvertisedService(dataService);
+
+  dataService.addCharacteristic(dataCharacteristic);
+  BLE.addService(dataService);
+
+  dataCharacteristic.setEventHandler(BLEWritten, onDataWritten);
+
+  BLE.advertise();
+  Serial.println("BLE peripheral ready and advertising...");
+}
+
+void loop() {
+  BLEDevice central = BLE.central();
+
+  if (central) {
+    Serial.print("Connected to central: ");
+    Serial.println(central.address());
+
+    RedLed(false);
+    GreenLed(true);
+
+    while (central.connected()) {
+      if (receivedValueReady) {
+        Serial.println(receivedValue);  // Only print the numeric value
+        receivedValueReady = false;
+      }
+    }
+
+    Serial.print("Disconnected from central: ");
+    Serial.println(central.address());
+
+    RedLed(true);
+    GreenLed(false);
+  }
+}
