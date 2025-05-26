@@ -1,0 +1,30 @@
+#----------------------------------------------------------
+#Reads Serial port to see which type of peak is detected
+#----------------------------------------------------------
+
+import serial
+import time
+
+# --- CONFIG ---
+serial_port = 'COM5'       #REPLACE WITH USED COM-PORT
+baud_rate = 115200         #CHANGE TO THE WRIGHT BAUDRATE
+
+# --- Initialize Serial ---
+ser = serial.Serial(serial_port, baud_rate)
+time.sleep(1)  # Let Arduino reset
+
+print("STARTING")
+
+while(1 == 1):
+    pulse = ser.readline().decode('utf-8').strip()
+
+    if(pulse == "1"):
+        print("SINGLE")
+    elif (pulse == "2"):
+        print("DOUBLE")
+    elif (pulse == "3"):
+        print("LONG")
+
+
+print("STOPPING")
+ser.close()
