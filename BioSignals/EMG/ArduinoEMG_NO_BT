@@ -1,0 +1,100 @@
+/*******************************************************************************************
+* upgraded_sender_no_ble.ino
+*
+* - Reads EMG signals from analog pin A0 using 16-bit resolution
+* - Detects gesture patterns based on EMG intensity and duration:
+*     0b001: Single pulse (short burst above threshold)
+*     0b010: Double pulse (two quick bursts)
+*     0b100: Long pulse (sustained signal above threshold)
+* - Displays gesture info over Serial and onboard RGB LEDs
+*******************************************************************************************/
+int resolutionBits = 16;
+int analogPin = A0;
+int updateTime = 50;
+float threshold = 1.8;
+
+// Flags
+bool above_threshold = false;
+bool above_time = false;
+bool dubble_possible = false;
+
+// Timers/counters
+int EMG_time = 0;
+int EMG_count = 0;
+int below_threshold_count = 0;
+int below_threshold_time = 0;
+
+int dubble_threshold = 500;
+int time_threshold = 1000;
+
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial);
+
+  Serial.println("EMG gesture detection starting...");
+  analogReadResolution(resolutionBits);
+}
+
+// Reads EMG average
+int readADC() {
+  long total = 0;
+  const int N = 100;
+  for (int i = 0; i < N; i++) {
+    total += analogRead(A0);
+  }
+  return total / N;
+}
+
+void loop() {
+  static unsigned long previousMillis = 0;
+  unsigned long currentMillis = millis();
+
+  if (currentMillis - previousMillis >= updateTime) {
+    previousMillis = currentMillis;
+
+    int emgValue = readADC();
+    double voltage = (emgValue * 3.3 / 65536);
+    // Serial.println(voltage);
+
+    if (voltage >= threshold) {
+      EMG_count++;
+      EMG_time = EMG_count * updateTime;
+      below_threshold_count = 0;
+      below_threshold_time = 0;
+
+      if (!above_threshold && !dubble_possible) {
+        //Serial.println("Gesture: SINGLE (0b001)");
+        Serial.println(0b001);
+        dubble_possible = true;
+      } else if (!above_threshold && dubble_possible) {
+        //Serial.println("Gesture: DOUBLE (0b010)");
+        Serial.println(0b010);
+        dubble_possible = false;
+      }
+
+      if (EMG_time > time_threshold && !above_time) {
+        //Serial.println("Gesture: LONG (0b100)");
+        Serial.println(0b011);
+        dubble_possible = false;
+        above_time = true;
+      }
+
+      above_threshold = true;
+    } else {
+      below_threshold_count++;
+      below_threshold_time = below_threshold_count * updateTime;
+
+      if (below_threshold_time > dubble_threshold) {
+        dubble_possible = false;
+      }
+
+      above_threshold = false;
+      above_time = false;
+      EMG_count = 0;
+      EMG_time = 0;
+
+    }
+    delay(5);
+  }
+}
