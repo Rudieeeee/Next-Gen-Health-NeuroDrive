@@ -1,9 +1,15 @@
-#----------------------------------------------------------
-#Reads Serial port to see which type of peak is detected
-#----------------------------------------------------------
+#--------------------------------------------------------------
+#----Reads Serial port to see which type of peak is detected.
+#-----------------
+#----Make sure you choose the right com_port and baud_rate.
+#-----------------
+#----To stop hold tab, so the comport closes. 
+#--------------------------------------------------------------
 
 import serial
 import time
+import keyboard
+
 
 # --- CONFIG ---
 serial_port = 'COM5'       #REPLACE WITH USED COM-PORT
@@ -15,15 +21,21 @@ time.sleep(1)  # Let Arduino reset
 
 print("STARTING")
 
-while(1 == 1):
-    pulse = ser.readline().decode('utf-8').strip()
+while(True):
+    pulse = ser.readline().decode('utf-8').strip() #reading the Serial Port
 
     if(pulse == "1"):
         print("SINGLE")
+
     elif (pulse == "2"):
         print("DOUBLE")
+
     elif (pulse == "3"):
         print("LONG")
+
+    # Check if 'tab' key is pressed
+    if keyboard.is_pressed('tab'):
+        ser.close()
 
 
 print("STOPPING")
