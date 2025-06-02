@@ -22,6 +22,13 @@ import os
 import matplotlib.pyplot as plt  # only used when debug‑mode is on
 import subprocess
 from hexadecimal import decimal_to_hex  # Import the hex conversion function
+import serial
+import time
+
+# Open the serial connection (replace with your actual COM port)
+ser = serial.Serial('COM4', 115200)
+last_sent_x = None  # To avoid re-sending the same value
+
 
 # ---------------------------------------------------------------------------
 # ►►  The pupil‑detection functions below are **identical** to the originals
@@ -511,9 +518,22 @@ def process_camera(cam_index):
                 # Convert transformed_x to hex
                 hex_x = decimal_to_hex(int(transformed_x))
                 
+                print("hello btiches")
+
+                if hex_x and hex_x != last_sent_x:
+                    try:
+                        byte_x = int(hex_x, 16)
+                        byte_y = 0x64
+                        ser.write(bytes([byte_x, byte_y]))
+                        last_sent_x = hex_x
+                        print("Hello")
+                    except ValueError:
+                        print(f"Invalid hex_x: {hex_x}")
+
+                
                 # Create ID_coordinate by appending "64" to hex_x
                 ID_coordinate = hex_x + "64"
-
+                ser.write(bytes([ID_coordinate]))
                 # Display both original and transformed coordinates
                 cv2.putText(frame_pupil_tracked, f"Original Deviation (x,y): ({dx}, {-dy})", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
                 cv2.putText(frame_pupil_tracked, f"Transformed (x,y): ({hex_x}, {-transformed_y})", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
@@ -751,6 +771,7 @@ def process_dual_cameras():
         # Handle reference point logic and screen_tracked toggle
         key = cv2.waitKey(1) & 0xFF
         if key == ord('w') and tracked:
+            tracked = 1
             reference_point = pupil_coords
             print(f"Origin reference point set at: {reference_point}")
         elif key == ord('y') and tracked and not calibration_complete:
@@ -799,11 +820,24 @@ def process_dual_cameras():
                 dx = smoothed_pupil_coords[0] - reference_point[0]
 
                 # Transform coordinates based on origin reference point
-                transformed_x, transformed_y = transform_coordinates(dx, dy)
+                transformed_x, transformed_y = transform_coordinates(-dx, dy)
                 
                 # Convert transformed_x to hex
                 hex_x = decimal_to_hex(int(transformed_x))
-                
+                last_sent_x = 0
+
+                if hex_x and hex_x != last_sent_x:
+                    try:
+                        byte_x = int(hex_x, 16)
+                        byte_y = 0x64
+                        ser.write(bytes([byte_x, byte_y]))
+                        last_sent_x = hex_x
+                        time.sleep(0.01)
+
+                    except ValueError:
+                        print(f"Invalid hex_x: {hex_x}")
+
+
                 # Create ID_coordinate by appending "64" to hex_x
                 ID_coordinate = hex_x + "64"
 
