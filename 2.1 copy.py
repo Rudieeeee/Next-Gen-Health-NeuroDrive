@@ -1,14 +1,14 @@
-"""Orlosky Pupil Detector — *live‑camera edition*
+"""Orlosky Pupil Detector — *live camera edition*
 
 This is a refactor of the original **OrloskyPupilDetector.py** to let you pick a
-web‑cam or a video file at launch (the same little Tk GUI that the 3‑D tracker
-uses).  All the pupil‑finding logic is unchanged; we've just:
+web cam or a video file at launch (the same little Tk GUI that the 3 D tracker
+uses).  All the pupil finding logic is unchanged; we've just:
 
-* added a camera‑selector / file‑browser GUI
+* added a camera selector / file browser GUI
 * broken the video loop out into a `process_camera()` routine
 * kept `process_video()` for offline files
 
-Run it with `python OrloskyPupilDetectorLive.py`, choose *Start Camera*, and hit
+Run it with `python OrloskyPupilDetectorLive.py`, choose *Start Camera*, and hit
 `Space` to pause, `D` for debug overlays, `Q` to quit.
 """
 
@@ -21,6 +21,7 @@ from tkinter import ttk, filedialog
 import os
 import matplotlib.pyplot as plt  # only used when debug‑mode is on
 import subprocess
+from hexadecimal import decimal_to_hex  # Import the hex conversion function
 
 # ---------------------------------------------------------------------------
 # ►►  The pupil‑detection functions below are **identical** to the originals
@@ -187,7 +188,7 @@ def process_frames(th_strict, th_med, th_relax, frame, gray, dark_pt, debug, ren
         masked_thr = cv2.bitwise_and(thr_img, center_mask)
         dil = cv2.dilate(masked_thr, kernel, iterations=2)
         contours, _ = cv2.findContours(dil, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        biggest = filter_contours_by_area_and_return_largest(contours, 1000, 3)
+        biggest = filter_contours_by_area_and_return_largest(contours, 36, 3)
         if biggest and len(biggest[0]) > 5:
             g = check_ellipse_goodness(dil, biggest[0])
             abs_pix, ratio, ov = check_contour_pixels(biggest[0], dil.shape)
@@ -301,7 +302,7 @@ def process_frame(frame, debug=False, render=False):
             masked_thr = cv2.bitwise_and(thr_img, center_mask)
             dil = cv2.dilate(masked_thr, kernel, iterations=2)
             contours, _ = cv2.findContours(dil, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            biggest = filter_contours_by_area_and_return_largest(contours, 1000, 3)
+            biggest = filter_contours_by_area_and_return_largest(contours, 36, 3)
             if biggest and len(biggest[0]) > 5:
                 g = check_ellipse_goodness(dil, biggest[0])
                 abs_pix, ratio, ov = check_contour_pixels(biggest[0], dil.shape)
@@ -313,20 +314,22 @@ def process_frame(frame, debug=False, render=False):
             if len(opt[0]) > 5:
                 ellipse = cv2.fitEllipse(opt[0])
                 ellipse_offset = ((ellipse[0][0] + x0, ellipse[0][1] + y0), ellipse[1], ellipse[2])
-                cv2.ellipse(frame, ellipse_offset, (0,255,0), 2)
-                # Draw dot at center
+                # Draw blue circle and dot instead of green ellipse and dot
                 center = (int(ellipse_offset[0][0]), int(ellipse_offset[0][1]))
-                cv2.circle(frame, center, 4, (0,255,0), -1)
+                radius = int(max(ellipse_offset[1]) / 2) # Approximate radius from major axis
+                cv2.circle(frame, center, radius, (255,0,0), 2) # Blue circle
+                cv2.circle(frame, center, 4, (255,0,0), -1) # Blue dot
                 last_pupil_ellipse = ellipse_offset
                 ellipse_drawn = True
                 ellipse_center = center
     else:
         cx_full, cy_full = 0, 0
-    # If no ellipse was drawn, draw the last known ellipse
+    # If no ellipse was drawn, draw the last known ellipse as a blue circle/dot
     if not ellipse_drawn and last_pupil_ellipse is not None:
-        cv2.ellipse(frame, last_pupil_ellipse, (0,255,0), 2)
         center = (int(last_pupil_ellipse[0][0]), int(last_pupil_ellipse[0][1]))
-        cv2.circle(frame, center, 4, (0,255,0), -1)
+        radius = int(max(last_pupil_ellipse[1]) / 2) # Approximate radius from major axis
+        cv2.circle(frame, center, radius, (255,0,0), 2) # Blue circle
+        cv2.circle(frame, center, 4, (255,0,0), -1) # Blue dot
         ellipse_center = center
     # Show deviation from reference point if set
     if reference_point is not None and ellipse_center is not None:
@@ -437,6 +440,19 @@ def process_camera(cam_index):
         frame_pupil_tracked = frame_pupil.copy()
         face_is_tracked = last_face is not None and pupil_coords != (0, 0)
 
+        # Add current pupil coordinates to history and maintain window size
+        if pupil_coords != (0, 0):
+            pupil_coords_history.append(pupil_coords)
+            if len(pupil_coords_history) > smoothing_window_size:
+                pupil_coords_history.pop(0)
+
+        # Calculate smoothed pupil coordinates
+        smoothed_pupil_coords = (0, 0)
+        if pupil_coords_history:
+            sum_x = sum(p[0] for p in pupil_coords_history)
+            sum_y = sum(p[1] for p in pupil_coords_history)
+            smoothed_pupil_coords = (int(sum_x / len(pupil_coords_history)), int(sum_y / len(pupil_coords_history)))
+
         if face_is_tracked:
             tracked_frame_count += 1
         else:
@@ -481,14 +497,57 @@ def process_camera(cam_index):
                     screen_tracked_proc = None
 
         # Draw overlays only if face is tracked
-        if tracked and reference_point is not None:
-            dy = pupil_coords[1] - reference_point[1]
-            dx = pupil_coords[0] - reference_point[0]
-            cv2.putText(frame_pupil_tracked, f"Deviation (x,y): ({dx}, {-dy})", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
-            cv2.putText(frame_pupil_tracked, "Eyes are tracked", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+        if tracked:
+            # Draw origin reference point if set
+            if reference_point is not None:
+                cv2.circle(frame_pupil_tracked, reference_point, 4, (0,0,255), -1)
+                # Use smoothed pupil coordinates for deviation calculation
+                dy = smoothed_pupil_coords[1] - reference_point[1]
+                dx = smoothed_pupil_coords[0] - reference_point[0]
+
+                # Transform coordinates based on origin reference point
+                transformed_x, transformed_y = transform_coordinates(dx, dy)
+                
+                # Convert transformed_x to hex
+                hex_x = decimal_to_hex(int(transformed_x))
+                
+                # Create ID_coordinate by appending "64" to hex_x
+                ID_coordinate = hex_x + "64"
+
+                # Display both original and transformed coordinates
+                cv2.putText(frame_pupil_tracked, f"Original Deviation (x,y): ({dx}, {-dy})", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+                cv2.putText(frame_pupil_tracked, f"Transformed (x,y): ({hex_x}, {-transformed_y})", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+                cv2.putText(frame_pupil_tracked, f"ID Coordinate: {ID_coordinate}", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+            
+            # Draw calibration points if available
+            for dot, point in calibration_points.items():
+                if point is not None:
+                    cv2.circle(frame_pupil_tracked, point, 4, (255,0,0), -1)  # Blue color
+                    cv2.putText(frame_pupil_tracked, dot, (point[0]+10, point[1]+10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)  # Blue text
+                    # Calculate deviation from this calibration point using smoothed coordinates
+                    dx = smoothed_pupil_coords[0] - point[0]
+                    dy = smoothed_pupil_coords[1] - point[1]
+                    deviation = math.sqrt(dx*dx + dy*dy)
+                    cv2.putText(frame_pupil_tracked, f"{dot} Deviation: {deviation:.1f}", (10, 110 + 30 * list(calibration_points.keys()).index(dot)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,0,0), 2)  # Blue text
+            
+            # If calibration is complete, find and display the closest reference point using smoothed coordinates
+            if calibration_complete and smoothed_pupil_coords != (0, 0):
+                min_deviation = float('inf')
+                closest_point = None
+                for dot, point in calibration_points.items():
+                    if point is not None:
+                        dx = smoothed_pupil_coords[0] - point[0]
+                        dy = smoothed_pupil_coords[1] - point[1]
+                        deviation = math.sqrt(dx*dx + dy*dy)
+                        if deviation < min_deviation:
+                            min_deviation = deviation
+                            closest_point = dot
+                if closest_point is not None:
+                    cv2.putText(frame_pupil_tracked, f"Closest to: {closest_point} (Deviation: {min_deviation:.1f})", (10, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+            
+            cv2.putText(frame_pupil_tracked, "Eyes are tracked", (10, 280), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
         else:
-            cv2.putText(frame_pupil_tracked, f"Deviation (x,y): Invalid", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
-            cv2.putText(frame_pupil_tracked, "Eyes are not tracked", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+            cv2.putText(frame_pupil_tracked, "Eyes are not tracked", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
 
         cv2.imshow('Face Tracking (Camera 0)', frame_face)
         cv2.imshow('Pupil Tracking (Camera 1)', frame_pupil_tracked)
@@ -548,12 +607,20 @@ def process_dual_cameras():
     current_calibration_idx = 0
     calibration_order = ['a', 'b', 'c', 'd']
 
+    # Add a list to store recent pupil coordinates for smoothing
+    pupil_coords_history = []
+    smoothing_window_size = 10 # Number of frames to average over
+
     def transform_coordinates(dx, dy):
         # Transform x coordinate based on sign
         if dx < 0:
-            transformed_x = dx * 1.17
+            transformed_x = dx * 1.67
+            # Limit to -100
+            transformed_x = max(transformed_x, -100)
         else:
             transformed_x = dx * 1.81
+            # Limit to +100
+            transformed_x = min(transformed_x, 100)
         return transformed_x, dy
 
     while True:
@@ -657,6 +724,19 @@ def process_dual_cameras():
         frame_pupil_tracked = frame_pupil.copy()
         face_is_tracked = last_face is not None and pupil_coords != (0, 0)
 
+        # Add current pupil coordinates to history and maintain window size
+        if pupil_coords != (0, 0):
+            pupil_coords_history.append(pupil_coords)
+            if len(pupil_coords_history) > smoothing_window_size:
+                pupil_coords_history.pop(0)
+
+        # Calculate smoothed pupil coordinates
+        smoothed_pupil_coords = (0, 0)
+        if pupil_coords_history:
+            sum_x = sum(p[0] for p in pupil_coords_history)
+            sum_y = sum(p[1] for p in pupil_coords_history)
+            smoothed_pupil_coords = (int(sum_x / len(pupil_coords_history)), int(sum_y / len(pupil_coords_history)))
+
         if face_is_tracked:
             tracked_frame_count += 1
         else:
@@ -714,35 +794,43 @@ def process_dual_cameras():
             # Draw origin reference point if set
             if reference_point is not None:
                 cv2.circle(frame_pupil_tracked, reference_point, 4, (0,0,255), -1)
-                dy = pupil_coords[1] - reference_point[1]
-                dx = pupil_coords[0] - reference_point[0]
-                
+                # Use smoothed pupil coordinates for deviation calculation
+                dy = smoothed_pupil_coords[1] - reference_point[1]
+                dx = smoothed_pupil_coords[0] - reference_point[0]
+
                 # Transform coordinates based on origin reference point
                 transformed_x, transformed_y = transform_coordinates(dx, dy)
                 
+                # Convert transformed_x to hex
+                hex_x = decimal_to_hex(int(transformed_x))
+                
+                # Create ID_coordinate by appending "64" to hex_x
+                ID_coordinate = hex_x + "64"
+
                 # Display both original and transformed coordinates
                 cv2.putText(frame_pupil_tracked, f"Original Deviation (x,y): ({dx}, {-dy})", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
-                cv2.putText(frame_pupil_tracked, f"Transformed (x,y): ({transformed_x:.1f}, {-transformed_y})", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+                cv2.putText(frame_pupil_tracked, f"Transformed (x,y): ({hex_x}, {-transformed_y})", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+                cv2.putText(frame_pupil_tracked, f"ID Coordinate: {ID_coordinate}", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
             
             # Draw calibration points if available
             for dot, point in calibration_points.items():
                 if point is not None:
                     cv2.circle(frame_pupil_tracked, point, 4, (255,0,0), -1)  # Blue color
                     cv2.putText(frame_pupil_tracked, dot, (point[0]+10, point[1]+10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)  # Blue text
-                    # Calculate deviation from this calibration point
-                    dy = pupil_coords[1] - point[1]
-                    dx = pupil_coords[0] - point[0]
+                    # Calculate deviation from this calibration point using smoothed coordinates
+                    dx = smoothed_pupil_coords[0] - point[0]
+                    dy = smoothed_pupil_coords[1] - point[1]
                     deviation = math.sqrt(dx*dx + dy*dy)
                     cv2.putText(frame_pupil_tracked, f"{dot} Deviation: {deviation:.1f}", (10, 110 + 30 * list(calibration_points.keys()).index(dot)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,0,0), 2)  # Blue text
             
-            # If calibration is complete, find and display the closest reference point
-            if calibration_complete and pupil_coords != (0, 0):
+            # If calibration is complete, find and display the closest reference point using smoothed coordinates
+            if calibration_complete and smoothed_pupil_coords != (0, 0):
                 min_deviation = float('inf')
                 closest_point = None
                 for dot, point in calibration_points.items():
                     if point is not None:
-                        dx = pupil_coords[0] - point[0]
-                        dy = pupil_coords[1] - point[1]
+                        dx = smoothed_pupil_coords[0] - point[0]
+                        dy = smoothed_pupil_coords[1] - point[1]
                         deviation = math.sqrt(dx*dx + dy*dy)
                         if deviation < min_deviation:
                             min_deviation = deviation
