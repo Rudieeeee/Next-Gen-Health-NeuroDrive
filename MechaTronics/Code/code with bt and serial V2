@@ -1,0 +1,166 @@
+#include <ArduinoBLE.h>
+#include <Arduino_CAN.h>
+
+// CAN setup
+const uint32_t JOYSTICK_CAN_ID = 0x02000400;
+const uint32_t STEP_CAN_ID     = 0x0A040000;
+const uint32_t PROFILE_ID      = 0x051;
+const int      STANDBY_PIN     = 7;
+
+uint8_t can_data[2] = {0x00, 0x00};
+bool can_active = false;
+bool emg_stationary = false;
+unsigned long last_can_send = 0;
+unsigned long last_step_send = 0;
+const unsigned long CAN_SEND_INTERVAL_MS  = 1;
+const unsigned long STEP_SEND_INTERVAL_MS = 684;
+
+#define DATA_CHAR_UUID "51FF12BB-3ED8-46E5-B4F9-D64E2FEC021B"
+#define SERVICE_UUID   "19B10010-E8F2-537E-4F6C-D104768A1214"
+
+BLEService dataService(SERVICE_UUID);
+BLECharacteristic dataCharacteristic(DATA_CHAR_UUID, BLEWriteWithoutResponse, 20);
+
+volatile bool receivedValueReady = false;
+volatile int receivedValue = 0;
+bool ble_connected = false;
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial);
+  Serial.println("BLE Receiver with CAN-style gesture control");
+
+  pinMode(LEDR, OUTPUT);
+  pinMode(LEDG, OUTPUT);
+  pinMode(LEDB, OUTPUT);
+  digitalWrite(LEDR, HIGH);
+  digitalWrite(LEDG, HIGH);
+  digitalWrite(LEDB, HIGH);
+
+  pinMode(STANDBY_PIN, OUTPUT);
+  digitalWrite(STANDBY_PIN, LOW);
+
+  if (!CAN.begin(CanBitRate::BR_125k)) {
+    Serial.println("CAN init failed");
+    while (1);
+  }
+
+  if (!BLE.begin()) {
+    Serial.println("BLE failed to start!");
+    while (1);
+  }
+
+  BLE.setLocalName("NextComputer");
+  BLE.setAdvertisedService(dataService);
+  dataService.addCharacteristic(dataCharacteristic);
+  BLE.addService(dataService);
+  dataCharacteristic.setEventHandler(BLEWritten, onDataWritten);
+  BLE.advertise();
+
+  Serial.println("BLE ready and advertising...");
+}
+
+void loop() {
+  BLEDevice central = BLE.central();
+
+  if (central && Serial.available()) {
+    Serial.print("Connected to: ");
+    Serial.println(central.address());
+    ble_connected = true;
+    handleLED();
+
+    if (!can_active) {
+      can_active = true;
+      uint8_t profile_data[4] = { 0x84, 0x00, 0x00, 0x01 };
+      CanMsg msg(CanStandardId(PROFILE_ID), 4, profile_data);
+      CAN.write(msg);
+      Serial.println("CAN transmission ENABLED");
+    }
+
+    while (central.connected()) {
+      // Handle BLE gesture input
+      if (receivedValueReady) {
+        handleGesture(receivedValue);
+        receivedValueReady = false;
+      }
+
+      // Read and process serial joystick input
+      if (Serial.available() >= 2) {
+        can_data[0] = (uint8_t)Serial.read();
+        delay(2);  // Short delay to ensure second byte arrives
+        can_data[1] = (uint8_t)Serial.read();
+
+        Serial.print("Joystick set to: ");
+        Serial.print(can_data[0], HEX);
+        Serial.print(" ");
+        Serial.println(can_data[1], HEX);
+      }
+
+      unsigned long now = millis();
+
+      // Send joystick CAN message
+      if (can_active && (now - last_can_send >= CAN_SEND_INTERVAL_MS)) {
+        last_can_send = now;
+
+        uint8_t data_to_send[2] = {0x00, 0x00};
+        if (!emg_stationary) {
+          data_to_send[0] = can_data[0];
+          data_to_send[1] = can_data[1];
+        }
+
+        CanMsg joystick_msg(CanExtendedId(JOYSTICK_CAN_ID), 2, data_to_send);
+        CAN.write(joystick_msg);
+      }
+
+      // Send step CAN message
+      if (can_active && (now - last_step_send >= STEP_SEND_INTERVAL_MS)) {
+        last_step_send = now;
+        uint8_t step_data[1] = {0x00};
+        CanMsg step_msg(CanExtendedId(STEP_CAN_ID), 1, step_data);
+        CAN.write(step_msg);
+      }
+    }
+
+    Serial.print("Disconnected from: ");
+    Serial.println(central.address());
+    ble_connected = false;
+    handleLED();
+  }
+}
+
+void onDataWritten(BLEDevice central, BLECharacteristic characteristic) {
+  uint8_t data[2] = {0};
+  characteristic.readValue(data, 2);
+
+  receivedValue = data[0] & 0b00000011;
+  float voltage = data[1] * 3.3 / 255.0;
+
+  receivedValueReady = true;
+}
+
+void handleGesture(int gesture) {
+  if (gesture == 1) {
+    emg_stationary = true;
+    Serial.println("Wheelchair → OFF");
+  } else if (gesture == 2) {
+    emg_stationary = false;
+    Serial.println("Wheelchair → ON");
+  }
+  handleLED();
+}
+
+void handleLED() {
+  if (!ble_connected) {
+    digitalWrite(LEDR, HIGH);
+    digitalWrite(LEDG, HIGH);
+    digitalWrite(LEDB, HIGH);
+  } else if (emg_stationary) {
+    digitalWrite(LEDR, LOW);  // RED
+    digitalWrite(LEDG, HIGH);
+    digitalWrite(LEDB, HIGH);
+  } else {
+    digitalWrite(LEDR, HIGH);
+    digitalWrite(LEDG, LOW);  // GREEN
+    digitalWrite(LEDB, HIGH);
+  }
+}
