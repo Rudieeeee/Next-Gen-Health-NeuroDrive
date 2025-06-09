@@ -389,7 +389,7 @@ def detect_cameras(max_test=10):
 
 def process_dual_cameras():
     # Open only camera 1
-    cap_pupil = cv2.VideoCapture(3, cv2.CAP_DSHOW)
+    cap_pupil = cv2.VideoCapture(0, cv2.CAP_DSHOW)
     if not cap_pupil.isOpened():
         print("Could not open camera.")
         return
