@@ -11,7 +11,7 @@ uses).  All the pupil finding logic is unchanged; we've just:
 Run it with `python OrloskyPupilDetectorLive.py`, choose *Start Camera*, and hit
 `Space` to pause, `D` for debug overlays, `Q` to quit.
 """
-
+import sys
 import cv2
 import numpy as np
 import math
@@ -21,11 +21,15 @@ from hexadecimal import decimal_to_hex  # Import the hex conversion function
 import serial
 import time
 import threading
+import random
+import socket
 
+TEST_MODE = "--test" in sys.argv
 
-# Open the serial connection (replace with your actual COM port)
-ser = serial.Serial('COM14', 115200)
-ser.flushInput()
+if not TEST_MODE:
+    # Open the serial connection (replace with your actual COM port)
+    ser = serial.Serial('COM14', 115200)
+    ser.flushInput()
 
 last_sent_x = None  # To avoid re-sending the same value
 # GUI dimensions and font (copied from 2.2 GUI.py)
@@ -367,26 +371,32 @@ def process_frame(frame, debug=False, render=False):
     
     return (cx_full, cy_full), frame
     
-# === TCP Socket Gaze Client ===
-
+# TCP Config
 HOST = '127.0.0.1'
 PORT = 65432
 smoothing_window_size = 10
 pupil_coords_history = []
 
-cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-if not cap.isOpened():
-    print("[EYE] Could not open camera.")
-    exit(1)
+# Check test mode flag from command-line argument
 
-print(f"[EYE] Eye tracker running. Sending gaze data to: {HOST}:{PORT}")
+
+if not TEST_MODE:
+    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    if not cap.isOpened():
+        print("[EYE] Could not open camera.")
+        exit(1)
+
+print(f"[EYE] Eye tracker running. Sending gaze data to: {HOST}:{PORT} | Test mode: {TEST_MODE}")
 
 while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
-
-    pupil_coords, _ = process_frame(frame, debug=False, render=False)
+    if TEST_MODE:
+        time.sleep(1)
+        pupil_coords = (random.randint(200, 400), random.randint(200, 400))
+    else:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        pupil_coords, _ = process_frame(frame, debug=False, render=False)
 
     if pupil_coords != (0, 0):
         pupil_coords_history.append(pupil_coords)
@@ -402,13 +412,17 @@ while True:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.connect((HOST, PORT))
             sock.sendall(f"{smoothed[0]},{smoothed[1]}".encode('utf-8'))
-            sock.close()
+        
         except Exception as e:
-            print(f"[SOCKET ERROR] {e}")
+            print(f"[SOCKET ERROR] {type(e).__name__}: {e}")
+
+        finally:
+            sock.close()
 
     key = cv2.waitKey(1) & 0xFF
     if key == ord('q'):
         break
 
-cap.release()
+if not TEST_MODE:
+    cap.release()
 cv2.destroyAllWindows()

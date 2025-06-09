@@ -9,13 +9,14 @@ import math
 import subprocess
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QLabel,
-    QVBoxLayout, QGridLayout, QStackedWidget
+    QVBoxLayout, QGridLayout, QStackedWidget,
+    QSizePolicy
 )
 from PyQt5.QtCore import Qt, QTimer, QRect
 from PyQt5.QtGui import QPainter, QColor
-from hexadecimal import decimal_to_hex  # make sure this module is available
+from hexadecimal import decimal_to_hex 
 
-SOCKET_PATH = '/tmp/eyetracker.sock'  # UNIX domain socket path
+
 
 class MainWindow(QWidget):
     def __init__(self):
@@ -38,6 +39,10 @@ class MainWindow(QWidget):
         self.layout().addWidget(self.stack)
         self.stack.setCurrentWidget(self.calibration_screen)
 
+        self.gaze_label = QLabel("Gaze: -, -")
+        self.gaze_label.setStyleSheet("font-size: 14px; color: #333;")
+        self.layout().addWidget(self.gaze_label)
+
         self.serial_port = None
         if not self.debug:
             try:
@@ -50,26 +55,41 @@ class MainWindow(QWidget):
             self.timer.timeout.connect(self.read_serial_data)
             self.timer.start(50)
 
-            threading.Thread(target=self.start_eye_tracking_socket_server, daemon=True).start()
-            self.launch_eye_tracker()
+        threading.Thread(target=self.start_eye_tracking_socket_server, daemon=True).start()
+        self.eye_tracker_process = None
+        self.launch_eye_tracker()
 
     def init_main_menu(self):
         self.menu = QWidget()
-        grid = QGridLayout()
-        grid.setSpacing(10)
+        layout = QGridLayout()
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         buttons = ['Fixed', 'Axis', 'Tracking', 'Setting']
         positions = [(0, 0), (0, 1), (1, 0), (1, 1)]
 
         for name, (row, col) in zip(buttons, positions):
             btn = QPushButton(name)
-            btn.setStyleSheet("font-size: 20px;")
-            btn.setMinimumSize(200, 200)
+            btn.setStyleSheet(""
+                "QPushButton {"
+                "    font-size: 24px;"
+                "    background-color: #e0e0e0;"
+                "    border-style: outset;"
+                "border-width: 2px;"
+                "border-color: black;      "
+                ""
+                "}"
+                "QPushButton:hover, QPushButton:checked, QPushButton:focus {"
+                "    background-color: #a0c4ff;"
+                "    outline: none;            "
+                "}"
+            )
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             btn.clicked.connect(lambda _, n=name: self.show_page(n))
-            grid.addWidget(btn, row, col)
+            layout.addWidget(btn, row, col)
             self.buttons.append(btn)
 
-        self.menu.setLayout(grid)
+        self.menu.setLayout(layout)
         self.stack.addWidget(self.menu)
 
     def init_detail_pages(self):
@@ -83,9 +103,14 @@ class MainWindow(QWidget):
         self.stack.setCurrentWidget(self.menu)
 
     def show_page(self, name):
-        self.fsm.transition("Tracking" if name == "Tracking" else "MainMenu")
-        index = list(self.pages.keys()).index(name) + 1
-        self.stack.setCurrentIndex(index)
+        fsm_state_map = {
+            "Fixed": "Fixed",
+            "Axis": "Axis",
+            "Tracking": "Tracking",
+            "Setting": "Setting"
+        }
+        self.fsm.transition(fsm_state_map.get(name, "MainMenu"))
+        self.stack.setCurrentWidget(self.pages[name])
 
     def go_home(self):
         self.fsm.transition("MainMenu")
@@ -109,12 +134,13 @@ class MainWindow(QWidget):
                 print(f"[ERROR] Serial send failed: {e}")
 
     def start_eye_tracking_socket_server(self):
-        if os.path.exists(SOCKET_PATH):
-            os.remove(SOCKET_PATH)
-        server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        server_socket.bind(SOCKET_PATH)
+        HOST = '127.0.0.1'
+        PORT = 65432
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_socket.bind((HOST, PORT))
         server_socket.listen(1)
-        print("[SOCKET] Listening for eye-tracking data...")
+        print(f"[SOCKET] Listening for eye-tracking data on {HOST}:{PORT}...")
         while True:
             conn, _ = server_socket.accept()
             with conn:
@@ -123,12 +149,24 @@ class MainWindow(QWidget):
                     try:
                         x_str, y_str = data.decode('utf-8').split(',')
                         xx, yy = int(x_str), int(y_str)
+                        self.gaze_label.setText(f"Gaze: {xx}, {yy}")
                         self.fsm.handle_eye_tracking(xx, yy, self)
                     except ValueError:
                         print("[SOCKET] Invalid data:", data)
 
     def launch_eye_tracker(self):
-        subprocess.Popen(['python3', 'eye-tracking.py'])
+        args = [sys.executable, 'GUI/eye-tracking.py']
+        if self.debug:
+            args.append('--test')
+        self.eye_tracker_process = subprocess.Popen(args)
+
+
+    def closeEvent(self, event):
+        if self.eye_tracker_process:
+            print("[GUI] Terminating eye tracker subprocess...")
+            self.eye_tracker_process.terminate()
+            self.eye_tracker_process.wait()
+        event.accept()
 
 
 def make_detail_screen(name, back_function):
@@ -158,11 +196,15 @@ class StateMachine:
 
     def handle_emg(self, data, app):
         print(f"[EMG] Trigger received: {data}")
-        if self.state == "MainMenu":
+
+        if self.state == "Calibration" and data == '1':
+            if hasattr(app, 'last_gaze'):
+                app.calibration_screen.set_calibration_point(app.last_gaze)
+        elif self.state == "MainMenu":
             if data == '1':
                 app.buttons[app.current_index].click()
             elif data == '2':
-                app.go_home()
+                QApplication.quit()
         elif self.state == "Tracking":
             if data == '1':
                 app.send_to_canbus(0x00)
@@ -172,17 +214,29 @@ class StateMachine:
                 app.go_home()
 
     def handle_eye_tracking(self, xx, yy, app):
+        app.last_gaze = (xx, yy)
+
         if self.state == "MainMenu":
             self._update_selected_button((xx, yy), app)
         elif self.state == "Tracking":
             hex_x, _ = self._transform_and_encode((xx, yy))
             app.send_to_canbus(hex_x)
+        
 
     def _update_selected_button(self, gaze, app):
         closest = self._closest_calibration_label(gaze)
         index_map = {'a': 0, 'b': 1, 'c': 2, 'd': 3}
         if closest in index_map:
             app.current_index = index_map[closest]
+            print(f"[FSM] Gaze selected button: {closest} (index {app.current_index})")
+
+            # Visually highlight the selected button
+            for i, btn in enumerate(app.buttons):
+                if i == app.current_index:
+                    btn.setChecked(True)
+                    btn.setFocus(Qt.OtherFocusReason)  # This is the key line
+                else:
+                    btn.setChecked(False)
 
     def _closest_calibration_label(self, gaze):
         gx, gy = gaze
@@ -236,10 +290,12 @@ class CalibrationScreen(QWidget):
         self.calibration_index += 1
         if self.calibration_index >= len(self.calibration_order):
             self.fsm.calibration_data = self.calibration_points
+            print(f"[CALIB] Final calibration data: {self.calibration_points}")
             self.fsm.transition("MainMenu")
             self.parent.show_menu()
         else:
             self.update()
+
 
     def paintEvent(self, event):
         if self.calibration_index < len(self.dot_positions):
@@ -250,8 +306,8 @@ class CalibrationScreen(QWidget):
 
     def keyPressEvent(self, event):
         if self.debug and event.key() == Qt.Key_Space:
-            fake_gaze = self.dot_positions[self.calibration_index]
-            self.set_calibration_point(fake_gaze)
+            if hasattr(self.parent, 'last_gaze'):
+                self.set_calibration_point(self.parent.last_gaze)
 
 
 if __name__ == "__main__":
@@ -259,3 +315,4 @@ if __name__ == "__main__":
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
+ 
