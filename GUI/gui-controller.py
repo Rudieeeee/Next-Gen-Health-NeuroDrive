@@ -189,6 +189,7 @@ class MainWindow(QWidget):
             self.eye_tracker_process.wait()
         if self.serial_port and self.serial_port.in_waiting:
             serial_port.close()
+            print("[SERIAL] closing serial")
         event.accept()
 
 
