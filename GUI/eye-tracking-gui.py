@@ -17,8 +17,6 @@ import numpy as np
 import math
 import os
 import matplotlib.pyplot as plt  # only used when debug‑mode is on
-from hexadecimal import decimal_to_hex  # Import the hex conversion function
-import serial
 import time
 import threading
 import random
@@ -26,10 +24,6 @@ import socket
 
 TEST_MODE = "--test" in sys.argv
 
-if not TEST_MODE:
-    # Open the serial connection (replace with your actual COM port)
-    ser = serial.Serial('COM14', 115200)
-    ser.flushInput()
 
 last_sent_x = None  # To avoid re-sending the same value
 # GUI dimensions and font (copied from 2.2 GUI.py)
@@ -370,7 +364,14 @@ def process_frame(frame, debug=False, render=False):
         cv2.imshow("Pupil", frame)
     
     return (cx_full, cy_full), frame
-    
+
+
+
+
+
+
+
+
 # TCP Config
 HOST = '127.0.0.1'
 PORT = 65432
@@ -381,41 +382,54 @@ pupil_coords_history = []
 
 
 if not TEST_MODE:
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-    if not cap.isOpened():
+    cap_pupil = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    if not cap_pupil.isOpened():
         print("[EYE] Could not open camera.")
         exit(1)
 
 print(f"[EYE] Eye tracker running. Sending gaze data to: {HOST}:{PORT} | Test mode: {TEST_MODE}")
 
+
 while True:
     if TEST_MODE:
-        time.sleep(1)
-        pupil_coords = (random.randint(200, 400), random.randint(200, 400))
+        time.sleep(0.1)
+        pupil_coords = (random.randint(-400, 400), random.randint(-400, 400))
     else:
-        ret, frame = cap.read()
-        if not ret:
+        time.sleep(0.1)
+        ret_pupil, frame_pupil = cap_pupil.read()
+        if not ret_pupil:
             break
-        pupil_coords, _ = process_frame(frame, debug=False, render=False)
+
+        pupil_coords, frame_pupil = process_frame(frame_pupil, render=False)
+        frame_pupil_tracked = frame_pupil.copy()
 
     if pupil_coords != (0, 0):
         pupil_coords_history.append(pupil_coords)
         if len(pupil_coords_history) > smoothing_window_size:
             pupil_coords_history.pop(0)
 
+    smoothed = (0, 0)
     if pupil_coords_history:
         sum_x = sum(p[0] for p in pupil_coords_history)
         sum_y = sum(p[1] for p in pupil_coords_history)
         smoothed = (int(sum_x / len(pupil_coords_history)), int(sum_y / len(pupil_coords_history)))
 
+        # Auto-set reference point once
+        if reference_point is None and smoothed != (0, 0):
+            reference_point = smoothed
+            print(f"[AUTO] Reference point set to: {reference_point}")
+
+        # Compute raw deviation
+        dx = smoothed[0] - reference_point[0]
+        dy = smoothed[1] - reference_point[1]
+
+        # Send raw deviation to GUI controller
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.connect((HOST, PORT))
-            sock.sendall(f"{smoothed[0]},{smoothed[1]}".encode('utf-8'))
-        
+            sock.sendall(f"{dx},{dy}".encode("utf-8"))
         except Exception as e:
             print(f"[SOCKET ERROR] {type(e).__name__}: {e}")
-
         finally:
             sock.close()
 
@@ -424,5 +438,5 @@ while True:
         break
 
 if not TEST_MODE:
-    cap.release()
+    cap_pupil.release()
 cv2.destroyAllWindows()
