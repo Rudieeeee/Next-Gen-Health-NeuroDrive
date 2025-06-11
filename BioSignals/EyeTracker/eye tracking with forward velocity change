@@ -519,9 +519,9 @@ def process_dual_cameras():
             # Transform coordinates based on origin reference point
             transformed_x, transformed_y = transform_coordinates(-dx, dy)
             
-            # Convert transformed_x to hex
+            # Convert transformed_x and transformed_y to hex
             hex_x = decimal_to_hex(int(transformed_x))
-            hex_y = decimal_to_hex(int(dy))
+            hex_y = decimal_to_hex(int(transformed_y))
             last_sent_x = 0
 
             if hex_x and hex_x != last_sent_x:
@@ -536,7 +536,7 @@ def process_dual_cameras():
 
             # Display both original and transformed coordinates
             cv2.putText(frame_pupil_tracked, f"Original Deviation (x,y): ({dx}, {-dy})", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
-            cv2.putText(frame_pupil_tracked, f"Transformed (x,y): ({hex_x}, {hex_x})", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+            cv2.putText(frame_pupil_tracked, f"Transformed (x,y): ({hex_x}, {hex_y})", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
         
         # Draw calibration points if available
         for dot, point in calibration_points.items():
