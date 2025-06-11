@@ -286,7 +286,7 @@ class StateMachine:
         else:
             tx = 0
 
-        hex_x = int(decimal_to_hex(int(tx)), 16)  # Use helper
+        hex_x = int(decimal_to_hex(int(-tx)), 16)  # Use helper
         hex_y = 0x64  # Placeholder
         return hex_x, hex_y
 
