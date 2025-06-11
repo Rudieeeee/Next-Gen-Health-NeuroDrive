@@ -187,6 +187,8 @@ class MainWindow(QWidget):
             print("[GUI] Terminating eye tracker subprocess...")
             self.eye_tracker_process.terminate()
             self.eye_tracker_process.wait()
+        if self.serial_port and self.serial_port.in_waiting:
+            serial_port.close()
         event.accept()
 
 
