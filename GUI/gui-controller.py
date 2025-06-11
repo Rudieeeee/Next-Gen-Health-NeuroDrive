@@ -65,7 +65,7 @@ class MainWindow(QWidget):
         layout.setSpacing(0)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        buttons = ['Fixed', 'Axis', 'Tracking', 'Setting']
+        buttons = ['Forward', 'Axis', 'Tracking', 'Setting']
         positions = [(0, 0), (0, 1), (1, 0), (1, 1)]
 
         for name, (row, col) in zip(buttons, positions):
@@ -94,7 +94,7 @@ class MainWindow(QWidget):
 
     def init_detail_pages(self):
         self.pages = {}
-        for name in ['Fixed', 'Axis', 'Tracking', 'Setting']:
+        for name in ['Forward', 'Axis', 'Tracking', 'Setting']:
             page = make_detail_screen(name, self.go_home)
             self.pages[name] = page
             self.stack.addWidget(page)
@@ -104,7 +104,7 @@ class MainWindow(QWidget):
 
     def show_page(self, name):
         fsm_state_map = {
-            "Fixed": "Fixed",
+            "Forward": "Forward",
             "Axis": "Axis",
             "Tracking": "Tracking",
             "Setting": "Setting"
@@ -125,13 +125,32 @@ class MainWindow(QWidget):
             except Exception as e:
                 print(f"[ERROR] Serial read: {e}")
 
-    def send_to_canbus(self, hex_command):
-        if self.serial_port and self.serial_port.is_open:
-            try:
-                self.serial_port.write(bytes([hex_command, 0x64]))
-                print(f"Sent to CANBUS: {hex(hex_command)}")
-            except Exception as e:
-                print(f"[ERROR] Serial send failed: {e}")
+    def send_to_canbus(self, current_label, hex_command=None):
+        if not self.serial_port and not self.serial_port.is_open:
+            return
+
+        if current_label == "Tracking":
+            byte_x = hex_command if hex_command is not None else 0x00
+            byte_y = 0x64
+        elif current_label == "Axis":
+            byte_x = hex_command if hex_command is not None else 0x00
+            byte_y = 0x00
+        elif current_label == "Forward":
+            byte_x = 0x00
+            byte_y = 0x64
+        elif current_label == "Setting":
+            byte_x = 0x00
+            byte_y = 0x00
+        else:
+            byte_x = 0x00
+            byte_y = 0x00
+
+        try:
+            self.serial_port.write(bytes([byte_x, byte_y]))
+            print(f"[SERIAL] Sent: [{hex(byte_x)}, {hex(byte_y)}]")
+        except Exception as e:
+            print(f"[ERROR] Serial send failed: {e}")
+
 
     def start_eye_tracking_socket_server(self):
         HOST = '127.0.0.1'
@@ -146,16 +165,18 @@ class MainWindow(QWidget):
             with conn:
                 data = conn.recv(1024)
                 if data:
+                    msg = data.decode('utf-8').strip()
                     try:
-                        x_str, y_str = data.decode('utf-8').split(',')
-                        xx, yy = int(x_str), int(y_str)
-                        self.gaze_label.setText(f"Gaze: {xx}, {yy}")
-                        self.fsm.handle_eye_tracking(xx, yy, self)
+                        dx_str, dy_str = msg.split(',')
+                        dx, dy = int(dx_str), int(dy_str)
+                        self.gaze_label.setText(f"Gaze deviation: {dx}, {dy}")
+                        self.fsm.handle_eye_tracking(dx, dy, self)
                     except ValueError:
-                        print("[SOCKET] Invalid data:", data)
+                        print("[SOCKET] Invalid data:", msg)
+
 
     def launch_eye_tracker(self):
-        args = [sys.executable, 'GUI/eye-tracking.py']
+        args = [sys.executable, 'GUI/eye-tracking-gui.py']
         if self.debug:
             args.append('--test')
         self.eye_tracker_process = subprocess.Popen(args)
@@ -205,22 +226,31 @@ class StateMachine:
                 app.buttons[app.current_index].click()
             elif data == '2':
                 QApplication.quit()
-        elif self.state == "Tracking":
+        elif self.state == "Tracking" or self.state == "Axis":
             if data == '1':
-                app.send_to_canbus(0x00)
+                app.send_to_canbus('Tracking')
             elif data == '2':
-                app.send_to_canbus(0x00)
+                app.send_to_canbus('Tracking')
                 self.transition("MainMenu")
                 app.go_home()
+        elif self.state == "Forward":
+            if data == '1':
+                app.send_to_canbus('Forward')
+                self.transition("MainMenu")
+                app.go_home()
+        
 
-    def handle_eye_tracking(self, xx, yy, app):
-        app.last_gaze = (xx, yy)
+        data = 0 #avoids emg from continuously triggering
+        
+
+    def handle_eye_tracking(self, dx, dy, app):
+        app.last_gaze = (dx, dy)
 
         if self.state == "MainMenu":
-            self._update_selected_button((xx, yy), app)
-        elif self.state == "Tracking":
-            hex_x, _ = self._transform_and_encode((xx, yy))
-            app.send_to_canbus(hex_x)
+            self._update_selected_button((dx, dy), app)
+        elif self.state == "Tracking" or self.state == "Axis":
+            hex_x, _ = self._transform_and_encode((dx, dy))
+            app.send_to_canbus(self.state, hex_x)
         
 
     def _update_selected_button(self, gaze, app):
@@ -246,12 +276,8 @@ class StateMachine:
         return closest
 
     def _transform_and_encode(self, gaze):
-        gx, gy = gaze
-        ref = self.calibration_data.get('a')  # reference point
-        if not ref:
-            return 0x00, 0x00
-        dx = gx - ref[0]
-        dy = gy - ref[1]
+        
+        dx, dy = gaze
 
         if dx < -20:
             tx = max(dx * 1.67, -100)
@@ -274,7 +300,6 @@ class CalibrationScreen(QWidget):
         self.calibration_index = 0
         self.calibration_order = ['a', 'b', 'c', 'd']
         self.calibration_points = {dot: None for dot in self.calibration_order}
-        self.dot_positions = [(100, 100), (500, 100), (100, 400), (500, 400)]
         self.setFocusPolicy(Qt.StrongFocus)
         self.label = QLabel("Calibration Mode: Look at red dot and press SPACE", self)
         self.label.setAlignment(Qt.AlignCenter)
@@ -282,6 +307,17 @@ class CalibrationScreen(QWidget):
         layout.addWidget(self.label)
         layout.addStretch()
         self.setLayout(layout)
+
+    def get_scaled_dot_positions(self):
+        w = self.width()
+        h = self.height()
+        return [
+            (int(w * 0.2), int(h * 0.2)),  # top-left
+            (int(w * 0.8), int(h * 0.2)),  # top-right
+            (int(w * 0.2), int(h * 0.8)),  # bottom-left
+            (int(w * 0.8), int(h * 0.8)),  # bottom-right
+        ]
+
 
     def set_calibration_point(self, coords):
         dot = self.calibration_order[self.calibration_index]
@@ -298,16 +334,19 @@ class CalibrationScreen(QWidget):
 
 
     def paintEvent(self, event):
-        if self.calibration_index < len(self.dot_positions):
+        dot_positions = self.get_scaled_dot_positions()
+        if self.calibration_index < len(dot_positions):
             painter = QPainter(self)
             painter.setBrush(QColor(255, 0, 0))
-            x, y = self.dot_positions[self.calibration_index]
+            x, y = dot_positions[self.calibration_index]
             painter.drawEllipse(QRect(x, y, 30, 30))
 
     def keyPressEvent(self, event):
         if self.debug and event.key() == Qt.Key_Space:
             if hasattr(self.parent, 'last_gaze'):
                 self.set_calibration_point(self.parent.last_gaze)
+    
+
 
 
 if __name__ == "__main__":
