@@ -26,7 +26,7 @@ import serial
 import time
 
 # Open the serial connection (replace with your actual COM port)
-ser = serial.Serial('COM4', 115200)
+# ser = serial.Serial('COM4', 115200)
 last_sent_x = None  # To avoid re-sending the same value
 
 
@@ -396,6 +396,7 @@ def process_dual_cameras():
     def transform_coordinates(dx, dy):
         # Transform x coordinate based on sign
         if dx < 0:
+            
             if dx > -20:
                 dx = 0
             else:
@@ -404,6 +405,11 @@ def process_dual_cameras():
             transformed_x = dx * 1.67
             # Limit to -100
             transformed_x = max(transformed_x, -100)
+            
+            # Transform dy based on negative dx
+            dy = 150 + transformed_x
+            # Limit dy to 100
+            dy = min(dy, 100)
         else:
             if dx < 20:
                 dx = 0
@@ -413,8 +419,12 @@ def process_dual_cameras():
             transformed_x = dx * 2.1
             # Limit to +100
             transformed_x = min(transformed_x, 100)
-        
             
+            # Transform dy based on positive dx
+            dy = 150 - transformed_x
+            # Limit dy to 100
+            dy = min(dy, 100)
+        
         return transformed_x, dy
 
     while True:
@@ -509,30 +519,24 @@ def process_dual_cameras():
             # Transform coordinates based on origin reference point
             transformed_x, transformed_y = transform_coordinates(-dx, dy)
             
-            # Convert transformed_x to hex
+            # Convert transformed_x and transformed_y to hex
             hex_x = decimal_to_hex(int(transformed_x))
+            hex_y = decimal_to_hex(int(transformed_y))
             last_sent_x = 0
 
             if hex_x and hex_x != last_sent_x:
                 try:
                     byte_x = int(hex_x, 16)
-
-                    # Convert hex_x back to decimal to apply condition
-                    x_decimal = int(transformed_x)
-                    
-                    # If x is outside ±50, send y = 0x20 (32); otherwise 0x64 (100)
-                    byte_y = 0x20 if abs(x_decimal) > 50 else 0x64
-                    
-                    ser.write(bytes([byte_x, byte_y]))
+                    byte_y = int(hex_y, 16)
+#                    ser.write(bytes([byte_x, byte_y]))
                     last_sent_x = hex_x
-                    time.sleep(0.1)
-
+                    time.sleep(0.01)
                 except ValueError:
                     print(f"Invalid hex_x: {hex_x}")
 
             # Display both original and transformed coordinates
             cv2.putText(frame_pupil_tracked, f"Original Deviation (x,y): ({dx}, {-dy})", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
-            cv2.putText(frame_pupil_tracked, f"Transformed (x,y): ({hex_x}, {-transformed_y})", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
+            cv2.putText(frame_pupil_tracked, f"Transformed (x,y): ({hex_x}, {hex_y})", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
         
         # Draw calibration points if available
         for dot, point in calibration_points.items():
