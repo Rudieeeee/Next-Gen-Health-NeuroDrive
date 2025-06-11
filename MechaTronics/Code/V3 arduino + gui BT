@@ -81,7 +81,6 @@ void loop() {
       // Handle BLE gesture input
       if (receivedValueReady) {
         handleGesture(receivedValue);
-        Serial.print(receivedValue);
         receivedValueReady = false;
       }
 
@@ -138,10 +137,10 @@ void onDataWritten(BLEDevice central, BLECharacteristic characteristic) {
 void handleGesture(int gesture) {
   if (gesture == 1) {
     emg_stationary = true;
-    // Serial.println("Wheelchair → OFF");
+    Serial.println("1");
   } else if (gesture == 2) {
     emg_stationary = false;
-    // Serial.println("Wheelchair → ON");
+    Serial.println("1");
   }
   handleLED();
 }
