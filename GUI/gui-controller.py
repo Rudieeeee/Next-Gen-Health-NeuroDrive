@@ -10,11 +10,14 @@ import subprocess
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QLabel,
     QVBoxLayout, QGridLayout, QStackedWidget,
-    QSizePolicy
+    QSizePolicy, QSlider
 )
 from PyQt5.QtCore import Qt, QTimer, QRect
 from PyQt5.QtGui import QPainter, QColor
 from hexadecimal import decimal_to_hex 
+
+byte_speed = 0  # Global variable to hold the slider speed value
+
 
 
 
@@ -27,7 +30,12 @@ class MainWindow(QWidget):
         self.stack = QStackedWidget()
         self.buttons = []
         self.current_index = 0
-        self.debug = True
+        self.debug = False
+
+        self.slider_timer = QTimer()
+        self.slider_timer.timeout.connect(self.update_slider_direction)
+        self.slider_timer.start(100)  # every 1000 ms = 1 second
+        self.slider_direction = 0
 
         self.fsm = StateMachine()
         self.calibration_screen = CalibrationScreen(self, self.fsm, debug=self.debug)
@@ -46,8 +54,9 @@ class MainWindow(QWidget):
         self.serial_port = None
         if not self.debug:
             try:
-                self.serial_port = serial.Serial('/dev/ttyUSB0', 115200, timeout=0.1)
+                self.serial_port = serial.Serial('COM14', 115200)
                 print("Serial port connected.")
+                self.serial_port.write(bytes([0x00, 0x00]))
             except serial.SerialException as e:
                 print(f"Failed to connect to serial port: {e}")
 
@@ -94,10 +103,18 @@ class MainWindow(QWidget):
 
     def init_detail_pages(self):
         self.pages = {}
+        self.setting_slider = None  # New attribute
+
         for name in ['Forward', 'Axis', 'Tracking', 'Setting']:
-            page = make_detail_screen(name, self.go_home)
+            result = make_detail_screen(name, self.go_home)
+            if name == "Setting":
+                page, slider = result
+                self.setting_slider = slider
+            else:
+                page = result
             self.pages[name] = page
             self.stack.addWidget(page)
+
 
     def show_menu(self):
         self.stack.setCurrentWidget(self.menu)
@@ -117,6 +134,7 @@ class MainWindow(QWidget):
         self.stack.setCurrentIndex(1)
 
     def read_serial_data(self):
+        
         if self.serial_port and self.serial_port.in_waiting:
             try:
                 line = self.serial_port.readline().decode('utf-8').strip()
@@ -125,19 +143,19 @@ class MainWindow(QWidget):
             except Exception as e:
                 print(f"[ERROR] Serial read: {e}")
 
-    def send_to_canbus(self, current_label, hex_command=None):
+    def send_to_canbus(self, current_label, hex_command=None, y_command = None):
         if not self.serial_port and not self.serial_port.is_open:
             return
 
         if current_label == "Tracking":
             byte_x = hex_command if hex_command is not None else 0x00
-            byte_y = 0x64
+            byte_y = y_command if y_command is not None else 0x00
         elif current_label == "Axis":
             byte_x = hex_command if hex_command is not None else 0x00
             byte_y = 0x00
         elif current_label == "Forward":
             byte_x = 0x00
-            byte_y = 0x64
+            byte_y = y_command if y_command is not None else 0x00
         elif current_label == "Setting":
             byte_x = 0x00
             byte_y = 0x00
@@ -150,6 +168,23 @@ class MainWindow(QWidget):
             print(f"[SERIAL] Sent: [{hex(byte_x)}, {hex(byte_y)}]")
         except Exception as e:
             print(f"[ERROR] Serial send failed: {e}")
+
+    def update_slider_direction(self):
+        if self.state() != "Setting":
+            return
+
+        if self.setting_slider:
+            current_value = self.setting_slider.value()
+            new_value = current_value + self.slider_direction
+
+            # Ensure value stays in slider range
+            new_value = max(0, min(100, new_value))
+
+            self.setting_slider.setValue(new_value)
+
+    def state(self):
+        return self.fsm.state
+
 
 
     def start_eye_tracking_socket_server(self):
@@ -176,7 +211,8 @@ class MainWindow(QWidget):
 
 
     def launch_eye_tracker(self):
-        args = [sys.executable, 'GUI/eye-tracking-gui.py']
+        script_path = os.path.join(os.getcwd(), 'eye-tracking.py')
+        args = [sys.executable, script_path]
         if self.debug:
             args.append('--test')
         self.eye_tracker_process = subprocess.Popen(args)
@@ -188,7 +224,7 @@ class MainWindow(QWidget):
             self.eye_tracker_process.terminate()
             self.eye_tracker_process.wait()
         if self.serial_port and self.serial_port.in_waiting:
-            serial_port.close()
+            serial.close()
             print("[SERIAL] closing serial")
         event.accept()
 
@@ -196,17 +232,49 @@ class MainWindow(QWidget):
 def make_detail_screen(name, back_function):
     page = QWidget()
     layout = QVBoxLayout()
+    slider = None
+    slider_label = None
+
     label = QLabel(f"{name} Page")
     label.setAlignment(Qt.AlignCenter)
     label.setStyleSheet("font-size: 24px;")
+    layout.addWidget(label)
+
+    if name == "Setting":
+        global byte_speed
+
+        slider = QSlider(Qt.Horizontal)
+        slider.setMinimum(0)
+        slider.setMaximum(100)
+        slider.setValue(byte_speed)  # Use the global variable as initial value
+        slider.setTickPosition(QSlider.TicksBelow)
+        slider.setTickInterval(10)
+
+        # Label to display current value
+        slider_label = QLabel(f"Speed: {byte_speed}")
+        slider_label.setStyleSheet("font-size: 18px;")
+
+        def on_slider_change(val):
+            global byte_speed
+            byte_speed = val
+            slider_label.setText(f"Speed: {val}")
+
+        slider.valueChanged.connect(on_slider_change)
+
+        layout.addWidget(slider)
+        layout.addWidget(slider_label)
+
+    layout.addStretch()
+
     back_btn = QPushButton("Back")
     back_btn.setFixedHeight(50)
     back_btn.clicked.connect(back_function)
-    layout.addWidget(label)
-    layout.addStretch()
     layout.addWidget(back_btn)
+
     page.setLayout(layout)
-    return page
+    return (page, slider) if name == "Setting" else page
+
+
 
 
 class StateMachine:
@@ -221,24 +289,16 @@ class StateMachine:
     def handle_emg(self, data, app):
         print(f"[EMG] Trigger received: {data}")
 
-        if self.state == "Calibration" and data == '1':
+        if self.state == "Calibration" and data == '1next':
             if hasattr(app, 'last_gaze'):
                 app.calibration_screen.set_calibration_point(app.last_gaze)
         elif self.state == "MainMenu":
-            if data == '1':
+            if data == '1next':
                 app.buttons[app.current_index].click()
             elif data == '2':
                 QApplication.quit()
-        elif self.state == "Tracking" or self.state == "Axis":
-            if data == '1':
-                app.send_to_canbus('Tracking')
-            elif data == '2':
-                app.send_to_canbus('Tracking')
-                self.transition("MainMenu")
-                app.go_home()
-        elif self.state == "Forward":
-            if data == '1':
-                app.send_to_canbus('Forward')
+        elif self.state == "Tracking" or self.state == "Axis" or self.state == "Forward" or self.state == "Setting":
+            if data == '1next':
                 self.transition("MainMenu")
                 app.go_home()
         
@@ -251,9 +311,23 @@ class StateMachine:
 
         if self.state == "MainMenu":
             self._update_selected_button((dx, dy), app)
-        elif self.state == "Tracking" or self.state == "Axis":
-            hex_x, _ = self._transform_and_encode((dx, dy))
-            app.send_to_canbus(self.state, hex_x)
+            hex_x, hex_y = self._transform_and_encode((dx, dy), self.state)
+            app.send_to_canbus(self.state, hex_x, hex_y)
+        elif self.state == "Tracking" or self.state == "Axis" or self.state == "Forward":
+            hex_x, hex_y = self._transform_and_encode((dx, dy), self.state)
+            app.send_to_canbus(self.state, hex_x, hex_y)
+        elif self.state == "Setting" and app.setting_slider:
+            hex_x, hex_y = self._transform_and_encode((dx, dy), self.state)
+            app.send_to_canbus(self.state, hex_x, hex_y)
+            print(hex_x)
+            if 50 < hex_x < 100:
+                app.slider_direction = -1
+            elif hex_x > 100:
+                app.slider_direction = 1
+            else:
+                app.slider_direction = 0
+
+            
         
 
     def _update_selected_button(self, gaze, app):
@@ -278,25 +352,44 @@ class StateMachine:
                       default=(None, None))[0]
         return closest
 
-    def _transform_and_encode(self, gaze):
-        
+    def _transform_and_encode(self, gaze, current_label):
         dx, dy = gaze
 
-        if dx < -20:
-            tx = max(dx * 1.67, -100)
-        elif dx > 20:
-            tx = min(dx * 2.1, 100)
+        if current_label == "Axis":
+            if dx < -25:
+                tx = 100
+            elif dx > 25:
+                tx = 156
+            else:
+                tx = 0
         else:
-            tx = 0
+            if dx < -20:
+                tx = max(dx * 1.67, -100)
+            elif dx > 20:
+                tx = min(dx * 2.1, 100)
+            else:
+                tx = 0
+            tx = int(-tx)
 
-        hex_x = int(decimal_to_hex(int(-tx)), 16)  # Use helper
-        hex_y = 0x64  # Placeholder
+        hex_x = int(decimal_to_hex(tx), 16)
+
+        ty = 0
+        if current_label != "Axis" and abs(dx) > 20:
+            steps = abs(dx) - 30
+            ty = max(100 - (steps * 5), 30)
+            ty = int(ty)
+
+        hex_y = int(decimal_to_hex(ty), 16)
+
         return hex_x, hex_y
+
+
 
 
 class CalibrationScreen(QWidget):
     def __init__(self, parent, fsm, debug=False):
         super().__init__()
+        
         self.parent = parent
         self.fsm = fsm
         self.debug = debug
@@ -357,4 +450,5 @@ if __name__ == "__main__":
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
+ 
  
