@@ -395,7 +395,7 @@ while True:
         time.sleep(0.1)
         pupil_coords = (random.randint(-400, 400), random.randint(-400, 400))
     else:
-        time.sleep(0.1)
+        time.sleep(0.01)
         ret_pupil, frame_pupil = cap_pupil.read()
         if not ret_pupil:
             break

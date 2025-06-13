@@ -17,9 +17,14 @@ from PyQt5.QtGui import QPainter, QColor
 from hexadecimal import decimal_to_hex 
 
 byte_speed = 0  # Global variable to hold the slider speed value
+import builtins
+from datetime import datetime
 
+def timed_print(*args, **kwargs):
+    current_time = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    builtins.print(f"[{current_time}]", *args, **kwargs)
 
-
+print = timed_print
 
 class MainWindow(QWidget):
     def __init__(self):
@@ -54,7 +59,7 @@ class MainWindow(QWidget):
         self.serial_port = None
         if not self.debug:
             try:
-                self.serial_port = serial.Serial('COM14', 115200)
+                self.serial_port = serial.Serial('COM3', 115200)
                 print("Serial port connected.")
                 self.serial_port.write(bytes([0x00, 0x00]))
             except serial.SerialException as e:
@@ -211,7 +216,7 @@ class MainWindow(QWidget):
 
 
     def launch_eye_tracker(self):
-        script_path = os.path.join(os.getcwd(), 'eye-tracking.py')
+        script_path = os.path.join(os.getcwd(), 'GUI\eye-tracking-gui.py')
         args = [sys.executable, script_path]
         if self.debug:
             args.append('--test')
@@ -356,17 +361,17 @@ class StateMachine:
         dx, dy = gaze
 
         if current_label == "Axis":
-            if dx < -25:
+            if dx < -15:
                 tx = 100
-            elif dx > 25:
+            elif dx > 15:
                 tx = 156
             else:
                 tx = 0
         else:
             if dx < -20:
-                tx = max(dx * 1.67, -100)
+                tx = max(dx, -100)
             elif dx > 20:
-                tx = min(dx * 2.1, 100)
+                tx = min(dx, 100)
             else:
                 tx = 0
             tx = int(-tx)
@@ -376,9 +381,9 @@ class StateMachine:
         ty = 0
         if current_label == "Reverse":
             ty = -100
-        elif current_label != "Axis" and abs(dx) > 20:
-            steps = abs(dx) - 30
-            ty = max(100 - (steps * 5), 30)
+        elif current_label != "Axis" and abs(dx) > 0:
+            steps = abs(dx)
+            ty = max(100 - (steps), 50)
             ty = int(ty)
 
         hex_y = int(decimal_to_hex(ty), 16)
