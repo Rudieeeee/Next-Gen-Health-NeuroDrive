@@ -74,7 +74,7 @@ class MainWindow(QWidget):
         layout.setSpacing(0)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        buttons = ['Forward', 'Axis', 'Tracking', 'Setting']
+        buttons = ['Reverse', 'Axis', 'Tracking', 'Setting']
         positions = [(0, 0), (0, 1), (1, 0), (1, 1)]
 
         for name, (row, col) in zip(buttons, positions):
@@ -105,7 +105,7 @@ class MainWindow(QWidget):
         self.pages = {}
         self.setting_slider = None  # New attribute
 
-        for name in ['Forward', 'Axis', 'Tracking', 'Setting']:
+        for name in ['Reverse', 'Axis', 'Tracking', 'Setting']:
             result = make_detail_screen(name, self.go_home)
             if name == "Setting":
                 page, slider = result
@@ -121,7 +121,7 @@ class MainWindow(QWidget):
 
     def show_page(self, name):
         fsm_state_map = {
-            "Forward": "Forward",
+            "Reverse": "Reverse",
             "Axis": "Axis",
             "Tracking": "Tracking",
             "Setting": "Setting"
@@ -153,7 +153,7 @@ class MainWindow(QWidget):
         elif current_label == "Axis":
             byte_x = hex_command if hex_command is not None else 0x00
             byte_y = 0x00
-        elif current_label == "Forward":
+        elif current_label == "Reverse":
             byte_x = 0x00
             byte_y = y_command if y_command is not None else 0x00
         elif current_label == "Setting":
@@ -289,16 +289,16 @@ class StateMachine:
     def handle_emg(self, data, app):
         print(f"[EMG] Trigger received: {data}")
 
-        if self.state == "Calibration" and data == '1next':
+        if self.state == "Calibration" and data == '1':
             if hasattr(app, 'last_gaze'):
                 app.calibration_screen.set_calibration_point(app.last_gaze)
         elif self.state == "MainMenu":
-            if data == '1next':
+            if data == '1':
                 app.buttons[app.current_index].click()
             elif data == '2':
                 QApplication.quit()
-        elif self.state == "Tracking" or self.state == "Axis" or self.state == "Forward" or self.state == "Setting":
-            if data == '1next':
+        elif self.state == "Tracking" or self.state == "Axis" or self.state == "Reverse" or self.state == "Setting":
+            if data == '1':
                 self.transition("MainMenu")
                 app.go_home()
         
@@ -313,7 +313,7 @@ class StateMachine:
             self._update_selected_button((dx, dy), app)
             hex_x, hex_y = self._transform_and_encode((dx, dy), self.state)
             app.send_to_canbus(self.state, hex_x, hex_y)
-        elif self.state == "Tracking" or self.state == "Axis" or self.state == "Forward":
+        elif self.state == "Tracking" or self.state == "Axis" or self.state == "Reverse":
             hex_x, hex_y = self._transform_and_encode((dx, dy), self.state)
             app.send_to_canbus(self.state, hex_x, hex_y)
         elif self.state == "Setting" and app.setting_slider:
@@ -374,7 +374,9 @@ class StateMachine:
         hex_x = int(decimal_to_hex(tx), 16)
 
         ty = 0
-        if current_label != "Axis" and abs(dx) > 20:
+        if current_label == "Reverse":
+            ty = -100
+        elif current_label != "Axis" and abs(dx) > 20:
             steps = abs(dx) - 30
             ty = max(100 - (steps * 5), 30)
             ty = int(ty)
